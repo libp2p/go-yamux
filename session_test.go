@@ -63,7 +63,7 @@ func testConf() *Config {
 	conf := DefaultConfig()
 	conf.AcceptBacklog = 64
 	conf.KeepAliveInterval = 100 * time.Millisecond
-	conf.ConnectionWriteTimeout = 250 * time.Millisecond
+	conf.ConnectionWriteTimeout = 350 * time.Millisecond
 	return conf
 }
 
