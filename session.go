@@ -69,6 +69,9 @@ type Session struct {
 	// between stream registration and stream shutdown
 	recvDoneCh chan struct{}
 
+	// client is true if we're the client and our stream IDs should be odd.
+	client bool
+
 	// shutdown is used to safely close a session
 	shutdown     bool
 	shutdownErr  error
@@ -92,6 +95,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool, readBuf in
 	}
 	s := &Session{
 		config:     config,
+		client:     client,
 		logger:     log.New(config.LogOutput, "", log.LstdFlags),
 		conn:       conn,
 		reader:     reader,
@@ -578,6 +582,10 @@ func (s *Session) handleGoAway(hdr header) error {
 
 // incomingStream is used to create a new incoming stream
 func (s *Session) incomingStream(id uint32) error {
+	if s.client != (id%2 == 0) {
+		s.logger.Printf("[ERR] yamux: both endpoints are clients")
+		return fmt.Errorf("both yamux endpoints are clients")
+	}
 	// Reject immediately if we are doing a go away
 	if atomic.LoadInt32(&s.localGoAway) == 1 {
 		hdr := header(make([]byte, headerSize))
