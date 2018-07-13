@@ -84,6 +84,52 @@ func testClientServerConfig(conf *Config) (*Session, *Session) {
 	return client, server
 }
 
+func TestClientClient(t *testing.T) {
+	conf := testConf()
+	conn1, conn2 := testConn()
+	client1, _ := Client(conn1, conf)
+	client2, _ := Client(conn2, conf)
+	defer client1.Close()
+	defer client2.Close()
+
+	client1.OpenStream()
+	_, err := client2.AcceptStream()
+	if err == nil {
+		t.Fatalf("should have failed to open a stream with two clients")
+	}
+	client2.OpenStream()
+	_, err = client1.AcceptStream()
+	if err == nil {
+		t.Fatalf("should have failed to open a stream with two clients")
+	}
+	if !client1.IsClosed() || !client2.IsClosed() {
+		t.Fatalf("sessions should have been closed by errors")
+	}
+}
+
+func TestServerServer(t *testing.T) {
+	conf := testConf()
+	conn1, conn2 := testConn()
+	server1, _ := Server(conn1, conf)
+	server2, _ := Server(conn2, conf)
+	defer server1.Close()
+	defer server2.Close()
+
+	server1.OpenStream()
+	_, err := server2.AcceptStream()
+	if err == nil {
+		t.Fatalf("should have failed to open a stream with two servers")
+	}
+	server2.OpenStream()
+	_, err = server1.AcceptStream()
+	if err == nil {
+		t.Fatalf("should have failed to open a stream with two servers")
+	}
+	if !server1.IsClosed() || !server2.IsClosed() {
+		t.Fatalf("sessions should have been closed by errors")
+	}
+}
+
 func TestPing(t *testing.T) {
 	client, server := testClientServer()
 	defer client.Close()
