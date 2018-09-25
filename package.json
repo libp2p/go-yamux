@@ -6,6 +6,14 @@
   "gx": {
     "dvcsimport": "github.com/whyrusleeping/yamux"
   },
+  "gxDependencies": [
+    {
+      "author": "Stebalien",
+      "hash": "QmUQy76yspPa3fRyY3GzXFTg9n8JVwFru6ue3KFRt4MeTw",
+      "name": "go-buffer-pool",
+      "version": "0.1.1"
+    }
+  ],
   "gxVersion": "0.10.0",
   "language": "go",
   "license": "",
