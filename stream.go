@@ -2,6 +2,7 @@ package yamux
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"

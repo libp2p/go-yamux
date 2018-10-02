@@ -1463,7 +1463,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	<-doneCh
 }
 
-func TestConnTimeoutClosesConnection(t *testing.T) {
+func TestConnTimeoutZeroWrittenBytesKeepsSessionOpen(t *testing.T) {
 	config := testConf()
 	// 8mb; we want the yamux window size to be big so that we're stalled by TCP's congestion control, not by yamux
 	// thus causing a connection timeout
@@ -1495,6 +1495,89 @@ func TestConnTimeoutClosesConnection(t *testing.T) {
 			bufCh <- struct{}{}
 			wg.Wait()
 		}
+	}()
+
+	var addr *net.TCPAddr
+	var conn *net.TCPConn
+	var sess *Session
+	var s *Stream
+
+	// Client-side: set a tiny write buffer to force the application (yamux) to wait.
+	if addr, err = net.ResolveTCPAddr("tcp", l.Addr().String()); err != nil {
+		t.Fatal(err)
+	}
+	if conn, err = net.DialTCP("tcp", nil, addr); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.SetWriteBuffer(1); err != nil {
+		t.Fatal(err)
+	}
+
+	<-bufCh
+
+	if sess, err = Client(conn, config); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = sess.OpenStream(); err != nil {
+		t.Fatal(err)
+	}
+	if s.Session().IsClosed() {
+		t.Error("expected session to be open")
+	}
+	if n, err := s.Write(make([]byte, 1024*1024)); err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("expected write to timeout, written bytes: %d, err: %v", n, err)
+	}
+	if s.Session().IsClosed() {
+		t.Error("expected session to be open")
+	}
+	if s.state == streamEstablished {
+		t.Error("expected session state to be 'streamEstablished'")
+	}
+}
+
+func TestConnTimeoutPartialWriteClosesConnection(t *testing.T) {
+	config := testConf()
+	// 8mb; we want the yamux window size to be big so that we're stalled by TCP's congestion control, not by yamux
+	// thus causing a connection timeout
+	config.MaxStreamWindowSize = 8 * 1024 * 1024
+	config.ConnectionWriteTimeout = 1 * time.Second
+	config.EnableKeepAlive = false
+
+	l, err := net.ListenTCP("tcp", nil)
+	if err != nil {
+		t.Error(err)
+	}
+
+	defer l.Close()
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	defer wg.Done()
+
+	bufCh := make(chan struct{})
+
+	// Server-side: a socket that reads 100 bytes, and then stalls, i.e. perceived as a partial write from the sender.
+	go func() {
+		conn, err := l.AcceptTCP()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = conn.SetReadBuffer(1); err != nil {
+			t.Fatal(err)
+		}
+
+		bufCh <- struct{}{}
+
+		buf := make([]byte, 100)
+		total := 0
+		for total < 100 {
+			if n, err := conn.Read(buf); err != nil {
+				t.Errorf("expected to read to not fail, err: %v", err)
+			} else {
+				total += n
+			}
+		}
+
+		wg.Wait()
 	}()
 
 	var addr *net.TCPAddr

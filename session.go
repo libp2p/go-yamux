@@ -63,7 +63,7 @@ type Session struct {
 
 	// sendCh is used to mark a stream as ready to send,
 	// or to send a header out directly.
-	sendCh chan sendReady
+	sendCh chan *sendReady
 
 	// recvDoneCh is closed when recv() exits to avoid a race
 	// between stream registration and stream shutdown
@@ -110,7 +110,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool, readBuf in
 		inflight:   make(map[uint32]struct{}),
 		synCh:      make(chan struct{}, config.AcceptBacklog),
 		acceptCh:   make(chan *Stream, config.AcceptBacklog),
-		sendCh:     make(chan sendReady, 64),
+		sendCh:     make(chan *sendReady, 64),
 		recvDoneCh: make(chan struct{}),
 		shutdownCh: make(chan struct{}),
 	}
@@ -361,20 +361,23 @@ func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, t
 	connWriteTimer, cancelFn := pooledTimer(s.config.ConnectionWriteTimeout)
 	defer cancelFn()
 
-	ready := sendReady{Hdr: hdr, Body: body, Err: errCh, Stage: stageInitial}
+	ready := &sendReady{Hdr: hdr, Body: body, Err: errCh, Stage: stageInitial}
 	select {
 	case s.sendCh <- ready:
 	case <-s.shutdownCh:
 		return ErrSessionShutdown
 	case <-timeout:
 		// timeout can be nil, in which case it'll block forever and the connWriteTimer will dominate.
-		// only the stream timed out before the write was sent across the channel, we do not kill the connection.
+		// if we're here, only the stream timed out before the write was sent across the channel,
+		// we do not kill the connection.
 		return ErrTimeout
 	case <-connWriteTimer.C:
 		// the connection timed out before the write was sent across the channel.
 		// no partial writes have happened in the context of this write.
+		// we do not kill the connection.
 		return ErrConnectionWriteTimeout
 	}
+
 	// --- The write went across the channel. ---
 WAIT:
 	select {
@@ -383,9 +386,9 @@ WAIT:
 	case <-s.shutdownCh:
 		return ErrSessionShutdown
 	case <-timeout:
-		// the stream timeout fired before the connection timeout.
-		// if we manage to cancel the write, do not kill the connection.
-		// else, wait until the connection timeout fires.
+		// The stream's timeout has fired before the connection's timeout.
+		// Try to abort the write. If we succeed, the connection stays alive.
+		// Else, wait until the connection timeout fires.
 		if atomic.CompareAndSwapUint32(&ready.Stage, stageInitial, stageFinal) {
 			return ErrTimeout
 		}
@@ -393,7 +396,13 @@ WAIT:
 		timeout = nil
 		goto WAIT
 	case <-connWriteTimer.C:
-		// kill the connection.
+		// The connection timeout fired; it takes precedence over the stream timeout
+		// (which may not even be set).
+		// Try to abort the write. If we succeed, the connection stays alive.
+		// Else, we terminate the connection, as there's a high risk of a partial write.
+		if atomic.CompareAndSwapUint32(&ready.Stage, stageInitial, stageFinal) {
+			return ErrConnectionWriteTimeout
+		}
 		s.exitErr(ErrConnectionWriteTimeout)
 		return ErrConnectionWriteTimeout
 	}
@@ -403,20 +412,11 @@ WAIT:
 // the send happens right here, we enforce the connection write timeout if we
 // can't queue the header to be sent.
 func (s *Session) sendNoWait(hdr header) error {
-	t := timerPool.Get()
-	timer := t.(*time.Timer)
-	timer.Reset(s.config.ConnectionWriteTimeout)
-	defer func() {
-		timer.Stop()
-		select {
-		case <-timer.C:
-		default:
-		}
-		timerPool.Put(t)
-	}()
+	timer, cancelFn := pooledTimer(s.config.ConnectionWriteTimeout)
+	defer cancelFn()
 
 	select {
-	case s.sendCh <- sendReady{Hdr: hdr}:
+	case s.sendCh <- &sendReady{Hdr: hdr, Stage: stageInitial}:
 		return nil
 	case <-s.shutdownCh:
 		return ErrSessionShutdown
