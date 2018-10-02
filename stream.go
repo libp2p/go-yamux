@@ -162,6 +162,14 @@ func (s *Stream) write(b []byte) (n int, err error) {
 	var flags uint16
 	var max uint32
 	var body io.Reader
+	var timeout <-chan time.Time
+
+	writeDeadline := s.writeDeadline.Load().(time.Time)
+	if !writeDeadline.IsZero() {
+		delay := writeDeadline.Sub(time.Now())
+		timeout = time.After(delay)
+	}
+
 START:
 	s.stateLock.Lock()
 	switch s.state {
@@ -191,7 +199,7 @@ START:
 
 	// Send the header
 	s.sendHdr.encode(typeData, flags, s.id, max)
-	if err = s.session.waitForSendErr(s.sendHdr, body, s.sendErr); err != nil {
+	if err = s.session.waitForSendErr(s.sendHdr, body, s.sendErr, timeout); err != nil {
 		return 0, err
 	}
 
@@ -202,12 +210,6 @@ START:
 	return int(max), err
 
 WAIT:
-	var timeout <-chan time.Time
-	writeDeadline := s.writeDeadline.Load().(time.Time)
-	if !writeDeadline.IsZero() {
-		delay := writeDeadline.Sub(time.Now())
-		timeout = time.After(delay)
-	}
 	select {
 	case <-s.sendNotifyCh:
 		goto START
@@ -259,7 +261,7 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Send the header
 	s.controlHdr.encode(typeWindowUpdate, flags, s.id, delta)
-	if err := s.session.waitForSendErr(s.controlHdr, nil, s.controlErr); err != nil {
+	if err := s.session.waitForSendErr(s.controlHdr, nil, s.controlErr, nil); err != nil {
 		return err
 	}
 	return nil
@@ -273,7 +275,7 @@ func (s *Stream) sendClose() error {
 	flags := s.sendFlags()
 	flags |= flagFIN
 	s.controlHdr.encode(typeWindowUpdate, flags, s.id, 0)
-	return s.session.waitForSendErr(s.controlHdr, nil, s.controlErr)
+	return s.session.waitForSendErr(s.controlHdr, nil, s.controlErr, nil)
 }
 
 // sendReset is used to send a RST
@@ -282,7 +284,7 @@ func (s *Stream) sendReset() error {
 	defer s.controlHdrLock.Unlock()
 
 	s.controlHdr.encode(typeWindowUpdate, flagRST, s.id, 0)
-	return s.session.waitForSendErr(s.controlHdr, nil, s.controlErr)
+	return s.session.waitForSendErr(s.controlHdr, nil, s.controlErr, nil)
 }
 
 // Reset resets the stream (forcibly closes the stream)
