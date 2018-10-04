@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"reflect"
 	"runtime"
 	"strings"
@@ -744,7 +745,7 @@ func TestReadDeadline(t *testing.T) {
 	}
 }
 
-func TestWriteDeadline(t *testing.T) {
+func TestWriteDeadlineWindowFull(t *testing.T) {
 	client, server := testClientServer()
 	defer client.Close()
 	defer server.Close()
@@ -1408,4 +1409,163 @@ func TestStreamResetRead(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	stream.Reset()
 	wc.Wait()
+}
+
+func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
+	config := testConf()
+	config.EnableKeepAlive = false
+
+	client, server := testClientServerConfig(config)
+	defer client.Close()
+	defer server.Close()
+
+	waitCh := make(chan struct{})
+	doneCh := make(chan struct{})
+
+	// Server side accepts two streams. The first one is the clogger.
+	go func() {
+		_, err := server.AcceptStream()
+		if err != nil {
+			t.Error(err)
+		}
+
+		stream2, err := server.AcceptStream()
+		if err != nil {
+			t.Error(err)
+		}
+
+		// Wait until all writes have timed out on the client.
+		<-waitCh
+
+		// stream2 should've received no messages, as they all expired in the buffer.
+		stream2.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		if b, err := ioutil.ReadAll(stream2); len(b) != 0 || err != ErrTimeout {
+			t.Errorf("writes from the client should've expired; got: %v, bytes: %v", err, b)
+		}
+		doneCh <- struct{}{}
+	}()
+
+	// stream1 is the clogger.
+	stream1, err := client.OpenStream()
+	if err != nil {
+		t.Error(err)
+	}
+
+	// all writes on stream2 will time out.
+	stream2, err := client.OpenStream()
+	if err != nil {
+		t.Error(err)
+	}
+
+	clientConn := client.conn.(*pipeConn)
+	clientConn.writeBlocker.Lock()
+
+	// Send a clogging write on stream1.
+	go func() {
+		stream1.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		stream1.Write([]byte{100})
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Send 100 writes on stream2.
+	var wg sync.WaitGroup
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func() {
+			defer wg.Done()
+			stream2.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+			n, err := stream2.Write([]byte{byte(i)})
+
+			if err != ErrTimeout || n != 0 {
+				t.Errorf("expected stream timeout error, got: %v, n: %d", err, n)
+			}
+		}()
+	}
+
+	// All writes completed and timed out; notify the server.
+	wg.Wait()
+	waitCh <- struct{}{}
+
+	<-doneCh
+}
+
+func TestConnTimeoutPartialWriteClosesConnection(t *testing.T) {
+	config := testConf()
+	// 8mb; we want the yamux window size to be big so that we're stalled by TCP's congestion control, not by yamux
+	// thus causing a connection timeout
+	config.MaxStreamWindowSize = 8 * 1024 * 1024
+	config.ConnectionWriteTimeout = 1 * time.Second
+	config.EnableKeepAlive = false
+
+	l, err := net.ListenTCP("tcp", nil)
+	if err != nil {
+		t.Error(err)
+	}
+	defer l.Close()
+
+	bufferSetCh := make(chan struct{})
+
+	// Server-side: a socket that reads 100 bytes, and then stalls, i.e. perceived as a partial write from the sender.
+	go func() {
+		conn, err := l.AcceptTCP()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = conn.SetReadBuffer(1); err != nil {
+			t.Fatal(err)
+		}
+
+		bufferSetCh <- struct{}{}
+
+		buf := make([]byte, 100)
+		total := 0
+		for total < 100 {
+			if n, err := conn.Read(buf); err != nil {
+				t.Errorf("expected to read to not fail, err: %v", err)
+			} else {
+				total += n
+			}
+		}
+	}()
+
+	var addr *net.TCPAddr
+	var conn *net.TCPConn
+	var sess *Session
+	var s *Stream
+
+	// Client-side: set a tiny write buffer to force the application (yamux) to wait.
+	if addr, err = net.ResolveTCPAddr("tcp", l.Addr().String()); err != nil {
+		t.Fatal(err)
+	}
+	if conn, err = net.DialTCP("tcp", nil, addr); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.SetWriteBuffer(1); err != nil {
+		t.Fatal(err)
+	}
+
+	<-bufferSetCh
+
+	if sess, err = Client(conn, config); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = sess.OpenStream(); err != nil {
+		t.Fatal(err)
+	}
+	if s.Session().IsClosed() {
+		t.Error("expected session to be open")
+	}
+	if n, err := s.Write(make([]byte, 1024*1024)); err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("expected write to timeout, written bytes: %d, err: %v", n, err)
+	}
+	if !s.Session().IsClosed() {
+		t.Error("expected session to be closed following the timeout")
+	}
+	if s.state != streamReset {
+		t.Error("expected session state to be 'streamReset'")
+	}
+	if err := s.Reset(); err != nil {
+		t.Error("expected stream reset to be noop")
+	}
 }
