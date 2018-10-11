@@ -123,20 +123,20 @@ START:
 
 WAIT:
 	var timeout <-chan time.Time
-	var timer *time.Timer
+	returnTimer := func() {}
 	readDeadline := s.readDeadline.Load().(time.Time)
 	if !readDeadline.IsZero() {
 		delay := readDeadline.Sub(time.Now())
-		timer = time.NewTimer(delay)
+		timer, cancelFunc := pooledTimer(delay)
 		timeout = timer.C
+		returnTimer = cancelFunc
 	}
 	select {
 	case <-s.recvNotifyCh:
-		if timer != nil {
-			timer.Stop()
-		}
+		returnTimer()
 		goto START
 	case <-timeout:
+		returnTimer()
 		return 0, ErrTimeout
 	}
 }
