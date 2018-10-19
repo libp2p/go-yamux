@@ -375,9 +375,9 @@ func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, t
 	ready := &sendReady{Hdr: hdr, Body: body, Err: errCh, Stage: stageInitial}
 
 	select {
-	case s.sendCh <- ready:
 	case <-s.shutdownCh:
 		return ErrSessionShutdown
+	case s.sendCh <- ready:
 	case <-timeout:
 		// we timed out before the write went across the channel. keep connection open.
 		return ErrTimeout
@@ -390,10 +390,10 @@ func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, t
 
 WAIT:
 	select {
-	case err := <-errCh:
-		return err
 	case <-s.shutdownCh:
 		return ErrSessionShutdown
+	case err := <-errCh:
+		return err
 	case <-timeout:
 		// A deadline had been set on the stream. Try to abort the write if it hasn't started.
 		if atomic.CompareAndSwapUint32(&ready.Stage, stageInitial, stageFinal) {
@@ -437,6 +437,9 @@ func (s *Session) sendNoWait(hdr header) error {
 func (s *Session) send() {
 	for {
 		select {
+		case <-s.shutdownCh:
+			return
+
 		case ready := <-s.sendCh:
 			// Commit to perform the write, iff it has not expired prior to being consumed from the ch.
 			if !atomic.CompareAndSwapUint32(&ready.Stage, stageInitial, stageFinal) {
@@ -471,8 +474,6 @@ func (s *Session) send() {
 
 			// No error, successful send
 			asyncSendErr(ready.Err, nil)
-		case <-s.shutdownCh:
-			return
 		}
 	}
 }
