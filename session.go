@@ -436,10 +436,15 @@ func (s *Session) sendNoWait(hdr header) error {
 // send is a long running goroutine that sends data
 func (s *Session) send() {
 	for {
+		// yield after processing the last message, if we've shutdown.
+		// s.sendCh is a buffered channel and Go doesn't guarantee select order.
 		select {
 		case <-s.shutdownCh:
 			return
+		default:
+		}
 
+		select {
 		case ready := <-s.sendCh:
 			// Commit to perform the write, iff it has not expired prior to being consumed from the ch.
 			if !atomic.CompareAndSwapUint32(&ready.Stage, stageInitial, stageFinal) {
@@ -474,6 +479,9 @@ func (s *Session) send() {
 
 			// No error, successful send
 			asyncSendErr(ready.Err, nil)
+
+		case <-s.shutdownCh:
+			return
 		}
 	}
 }
