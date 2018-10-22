@@ -243,6 +243,13 @@ func (s *Stream) sendWindowUpdate() error {
 	s.controlHdrLock.Lock()
 	defer s.controlHdrLock.Unlock()
 
+	select {
+	case <-s.session.shutdownCh:
+		// short circuit as we're shutting down
+		return nil
+	default:
+	}
+
 	// Determine the delta update
 	max := s.session.config.MaxStreamWindowSize
 	s.recvLock.Lock()
@@ -274,6 +281,13 @@ func (s *Stream) sendClose() error {
 	s.controlHdrLock.Lock()
 	defer s.controlHdrLock.Unlock()
 
+	select {
+	case <-s.session.shutdownCh:
+		// short circuit as we're shutting down
+		return nil
+	default:
+	}
+
 	flags := s.sendFlags()
 	flags |= flagFIN
 	s.controlHdr.encode(typeWindowUpdate, flags, s.id, 0)
@@ -284,6 +298,13 @@ func (s *Stream) sendClose() error {
 func (s *Stream) sendReset() error {
 	s.controlHdrLock.Lock()
 	defer s.controlHdrLock.Unlock()
+
+	select {
+	case <-s.session.shutdownCh:
+		// short circuit as we're shutting down
+		return nil
+	default:
+	}
 
 	s.controlHdr.encode(typeWindowUpdate, flagRST, s.id, 0)
 	return s.session.waitForSendErr(s.controlHdr, nil, s.controlErr, nil)
