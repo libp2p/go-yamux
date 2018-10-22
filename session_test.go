@@ -1472,7 +1472,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(100)
 	for i := 0; i < 100; i++ {
-		go func() {
+		go func(i int) {
 			defer wg.Done()
 			stream2.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 			n, err := stream2.Write([]byte{byte(i)})
@@ -1480,7 +1480,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 			if err != ErrTimeout || n != 0 {
 				t.Errorf("expected stream timeout error, got: %v, n: %d", err, n)
 			}
-		}()
+		}(i)
 	}
 
 	// All writes completed and timed out; notify the server.
