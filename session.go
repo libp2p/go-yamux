@@ -370,6 +370,12 @@ func pooledTimer(d time.Duration) (*time.Timer, func()) {
 //    has not set a write deadline on the stream.
 //  * non-`nil` if (a) this is a user-requested write, and (b) the stream has a write deadline.
 func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, timeout <-chan time.Time) error {
+	select {
+	case <-s.shutdownCh:
+		return ErrSessionShutdown
+	default:
+	}
+
 	var connWriteTimerCh <-chan time.Time
 
 	if timeout == nil {
@@ -427,6 +433,12 @@ WAIT:
 // the send happens right here, we enforce the connection write timeout if we
 // can't queue the header to be sent.
 func (s *Session) sendNoWait(hdr header) error {
+	select {
+	case <-s.shutdownCh:
+		return ErrSessionShutdown
+	default:
+	}
+
 	timer, cancelFn := pooledTimer(s.config.ConnectionWriteTimeout)
 	defer cancelFn()
 

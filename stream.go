@@ -243,13 +243,6 @@ func (s *Stream) sendWindowUpdate() error {
 	s.controlHdrLock.Lock()
 	defer s.controlHdrLock.Unlock()
 
-	select {
-	case <-s.session.shutdownCh:
-		// short circuit as we're shutting down
-		return nil
-	default:
-	}
-
 	// Determine the delta update
 	max := s.session.config.MaxStreamWindowSize
 	s.recvLock.Lock()
@@ -281,13 +274,6 @@ func (s *Stream) sendClose() error {
 	s.controlHdrLock.Lock()
 	defer s.controlHdrLock.Unlock()
 
-	select {
-	case <-s.session.shutdownCh:
-		// short circuit as we're shutting down
-		return nil
-	default:
-	}
-
 	flags := s.sendFlags()
 	flags |= flagFIN
 	s.controlHdr.encode(typeWindowUpdate, flags, s.id, 0)
@@ -299,13 +285,6 @@ func (s *Stream) sendReset() error {
 	s.controlHdrLock.Lock()
 	defer s.controlHdrLock.Unlock()
 
-	select {
-	case <-s.session.shutdownCh:
-		// short circuit as we're shutting down
-		return nil
-	default:
-	}
-
 	s.controlHdr.encode(typeWindowUpdate, flagRST, s.id, 0)
 	return s.session.waitForSendErr(s.controlHdr, nil, s.controlErr, nil)
 }
@@ -314,6 +293,11 @@ func (s *Stream) sendReset() error {
 func (s *Stream) Reset() error {
 	s.stateLock.Lock()
 	switch s.state {
+	case streamInit:
+		// No need to send anything.
+		s.state = streamReset
+		s.stateLock.Unlock()
+		return nil
 	case streamClosed, streamReset:
 		s.stateLock.Unlock()
 		return nil
@@ -337,12 +321,7 @@ func (s *Stream) Close() error {
 	closeStream := false
 	s.stateLock.Lock()
 	switch s.state {
-	// Opened means we need to signal a close
-	case streamSYNSent:
-		fallthrough
-	case streamSYNReceived:
-		fallthrough
-	case streamEstablished:
+	case streamInit, streamSYNSent, streamSYNReceived, streamEstablished:
 		s.state = streamLocalClose
 		goto SEND_CLOSE
 
