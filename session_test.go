@@ -156,6 +156,53 @@ func TestServerServer(t *testing.T) {
 	}
 }
 
+func TestStreamAfterShutdown(t *testing.T) {
+	do := func(cb func(s *Stream)) {
+		var wg sync.WaitGroup
+		client, server := testClientServer()
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			s, err := client.OpenStream()
+			if err == nil {
+				cb(s)
+				s.Reset()
+			}
+			client.Close()
+		}()
+		go func() {
+			defer wg.Done()
+			server.Close()
+		}()
+		wg.Wait()
+	}
+	// test reset
+	for i := 0; i < 100; i++ {
+		do(func(s *Stream) {})
+	}
+	// test close
+	for i := 0; i < 100; i++ {
+		do(func(s *Stream) {
+			s.Close()
+		})
+	}
+
+	// test write
+	for i := 0; i < 100; i++ {
+		do(func(s *Stream) {
+			s.Write([]byte{10})
+		})
+	}
+
+	// test read
+	for i := 0; i < 100; i++ {
+		do(func(s *Stream) {
+			s.Read([]byte{10})
+		})
+	}
+}
+
 func TestPing(t *testing.T) {
 	client, server := testClientServer()
 	defer client.Close()
