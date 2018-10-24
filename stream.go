@@ -314,6 +314,11 @@ func (s *Stream) sendReset() error {
 func (s *Stream) Reset() error {
 	s.stateLock.Lock()
 	switch s.state {
+	case streamInit:
+		// No need to send anything.
+		s.state = streamReset
+		s.stateLock.Unlock()
+		return nil
 	case streamClosed, streamReset:
 		s.stateLock.Unlock()
 		return nil
@@ -337,12 +342,7 @@ func (s *Stream) Close() error {
 	closeStream := false
 	s.stateLock.Lock()
 	switch s.state {
-	// Opened means we need to signal a close
-	case streamSYNSent:
-		fallthrough
-	case streamSYNReceived:
-		fallthrough
-	case streamEstablished:
+	case streamInit, streamSYNSent, streamSYNReceived, streamEstablished:
 		s.state = streamLocalClose
 		goto SEND_CLOSE
 
