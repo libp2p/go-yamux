@@ -34,7 +34,8 @@ func captureLogs(s *Session) *logCapture {
 type pipeConn struct {
 	reader       *io.PipeReader
 	writer       *io.PipeWriter
-	writeBlocker sync.Mutex
+	writeBlocker chan struct{}
+	closeCh      chan struct{}
 }
 
 func (p *pipeConn) Read(b []byte) (int, error) {
@@ -42,21 +43,45 @@ func (p *pipeConn) Read(b []byte) (int, error) {
 }
 
 func (p *pipeConn) Write(b []byte) (int, error) {
-	p.writeBlocker.Lock()
-	defer p.writeBlocker.Unlock()
-	return p.writer.Write(b)
+	select {
+	case p.writeBlocker <- struct{}{}:
+	case <-p.closeCh:
+		return 0, io.ErrClosedPipe
+	}
+	n, err := p.writer.Write(b)
+	<-p.writeBlocker
+	return n, err
 }
 
 func (p *pipeConn) Close() error {
 	p.reader.Close()
-	return p.writer.Close()
+	werr := p.writer.Close()
+	close(p.closeCh)
+	return werr
+}
+func (p *pipeConn) BlockWrites() {
+	p.writeBlocker <- struct{}{}
+}
+
+func (p *pipeConn) UnblockWrites() {
+	<-p.writeBlocker
 }
 
 func testConn() (io.ReadWriteCloser, io.ReadWriteCloser) {
 	read1, write1 := io.Pipe()
 	read2, write2 := io.Pipe()
-	conn1 := &pipeConn{reader: read1, writer: write2}
-	conn2 := &pipeConn{reader: read2, writer: write1}
+	conn1 := &pipeConn{
+		reader:       read1,
+		writer:       write2,
+		writeBlocker: make(chan struct{}, 1),
+		closeCh:      make(chan struct{}, 1),
+	}
+	conn2 := &pipeConn{
+		reader:       read2,
+		writer:       write1,
+		writeBlocker: make(chan struct{}, 1),
+		closeCh:      make(chan struct{}, 1),
+	}
 	return conn1, conn2
 }
 
@@ -160,7 +185,7 @@ func TestPing_Timeout(t *testing.T) {
 
 	// Prevent the client from responding
 	clientConn := client.conn.(*pipeConn)
-	clientConn.writeBlocker.Lock()
+	clientConn.BlockWrites()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -178,7 +203,7 @@ func TestPing_Timeout(t *testing.T) {
 	}
 
 	// Verify that we recover, even if we gave up
-	clientConn.writeBlocker.Unlock()
+	clientConn.UnblockWrites()
 
 	go func() {
 		_, err := server.Ping() // Ping via the server session
@@ -864,7 +889,7 @@ func TestKeepAlive_Timeout(t *testing.T) {
 
 	// Prevent the client from responding
 	clientConn := client.conn.(*pipeConn)
-	clientConn.writeBlocker.Lock()
+	clientConn.BlockWrites()
 
 	select {
 	case err := <-errCh:
@@ -1070,7 +1095,7 @@ func TestSession_WindowUpdateWriteDuringRead(t *testing.T) {
 		defer stream.Close()
 
 		conn := client.conn.(*pipeConn)
-		conn.writeBlocker.Lock()
+		conn.BlockWrites()
 
 		_, err = stream.Read(make([]byte, flood))
 		if err != ErrConnectionWriteTimeout {
@@ -1165,7 +1190,7 @@ func TestSession_sendNoWait_Timeout(t *testing.T) {
 		defer stream.Close()
 
 		conn := client.conn.(*pipeConn)
-		conn.writeBlocker.Lock()
+		conn.BlockWrites()
 
 		hdr := header(make([]byte, headerSize))
 		hdr.encode(typePing, flagACK, 0, 0)
@@ -1209,7 +1234,7 @@ func TestSession_PingOfDeath(t *testing.T) {
 		}
 		defer stream.Close()
 
-		conn.writeBlocker.Lock()
+		conn.BlockWrites()
 		for {
 			hdr := header(make([]byte, headerSize))
 			hdr.encode(typePing, 0, 0, 0)
@@ -1246,7 +1271,7 @@ func TestSession_PingOfDeath(t *testing.T) {
 		// Wait for a while to make sure the previous ping times out,
 		// then turn writes back on and make sure a ping works again.
 		time.Sleep(2 * server.config.ConnectionWriteTimeout)
-		conn.writeBlocker.Unlock()
+		conn.UnblockWrites()
 		if _, err = client.Ping(); err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -1285,7 +1310,7 @@ func TestSession_ConnectionWriteTimeout(t *testing.T) {
 		defer stream.Close()
 
 		conn := client.conn.(*pipeConn)
-		conn.writeBlocker.Lock()
+		conn.BlockWrites()
 
 		// Since the write goroutine is blocked then this will return a
 		// timeout since it can't get feedback about whether the write
@@ -1458,7 +1483,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	}
 
 	clientConn := client.conn.(*pipeConn)
-	clientConn.writeBlocker.Lock()
+	clientConn.BlockWrites()
 
 	// Send a clogging write on stream1.
 	go func() {
@@ -1472,7 +1497,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(100)
 	for i := 0; i < 100; i++ {
-		go func() {
+		go func(i int) {
 			defer wg.Done()
 			stream2.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 			n, err := stream2.Write([]byte{byte(i)})
@@ -1480,7 +1505,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 			if err != ErrTimeout || n != 0 {
 				t.Errorf("expected stream timeout error, got: %v, n: %d", err, n)
 			}
-		}()
+		}(i)
 	}
 
 	// All writes completed and timed out; notify the server.
