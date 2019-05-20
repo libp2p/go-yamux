@@ -166,7 +166,6 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 func (s *Stream) write(b []byte, timeout <-chan time.Time) (n int, err error) {
 	var flags uint16
 	var max uint32
-	var body io.Reader
 	var hdr header
 
 START:
@@ -194,11 +193,10 @@ START:
 
 	// Send up to our send window
 	max = min(window, uint32(len(b)))
-	body = bytes.NewReader(b[:max])
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
-	if err = s.session.waitForSendErr(hdr, body, s.sendErr, timeout); err != nil {
+	if err = s.session.waitForSendErr(hdr, b[:max], s.sendErr, timeout); err != nil {
 		return 0, err
 	}
 

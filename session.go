@@ -87,7 +87,7 @@ type Session struct {
 // or to directly send a header
 type sendReady struct {
 	Hdr   header
-	Body  io.Reader
+	Body  []byte
 	Err   chan error
 	Stage uint32
 }
@@ -338,7 +338,7 @@ func (s *Session) keepalive() {
 }
 
 // waitForSendErr waits to send a header, checking for a potential shutdown
-func (s *Session) waitForSend(hdr header, body io.Reader) error {
+func (s *Session) waitForSend(hdr header, body []byte) error {
 	errCh := make(chan error, 1)
 	return s.waitForSendErr(hdr, body, errCh, nil)
 }
@@ -366,7 +366,7 @@ func pooledTimer(d time.Duration) (*time.Timer, func()) {
 //  * `nil` if (a) this is a control message (ping, go away, window update, etc.), or (b) if the user
 //    has not set a write deadline on the stream.
 //  * non-`nil` if (a) this is a user-requested write, and (b) the stream has a write deadline.
-func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, timeout <-chan time.Time) error {
+func (s *Session) waitForSendErr(hdr header, body []byte, errCh chan error, timeout <-chan time.Time) error {
 	select {
 	case <-s.shutdownCh:
 		return s.shutdownErr
@@ -482,7 +482,7 @@ func (s *Session) sendLoop() error {
 
 			// Send data from a body if given
 			if ready.Body != nil {
-				_, err := io.Copy(s.conn, ready.Body)
+				s.conn.Write(ready.Body)
 				if err != nil {
 					s.logger.Printf("[ERR] yamux: Failed to write body: %v", err)
 					asyncSendErr(ready.Err, err)
