@@ -169,7 +169,7 @@ func (s *Session) Open() (net.Conn, error) {
 // OpenStream is used to create a new stream
 func (s *Session) OpenStream() (*Stream, error) {
 	if s.IsClosed() {
-		return nil, ErrSessionShutdown
+		return nil, s.shutdownErr
 	}
 	if atomic.LoadInt32(&s.remoteGoAway) == 1 {
 		return nil, ErrRemoteGoAway
@@ -179,7 +179,7 @@ func (s *Session) OpenStream() (*Stream, error) {
 	select {
 	case s.synCh <- struct{}{}:
 	case <-s.shutdownCh:
-		return nil, ErrSessionShutdown
+		return nil, s.shutdownErr
 	}
 
 GET_ID:
@@ -315,7 +315,7 @@ func (s *Session) Ping() (time.Duration, error) {
 		s.pingLock.Unlock()
 		return 0, ErrTimeout
 	case <-s.shutdownCh:
-		return 0, ErrSessionShutdown
+		return 0, s.shutdownErr
 	}
 
 	// Compute the RTT
@@ -372,7 +372,7 @@ func pooledTimer(d time.Duration) (*time.Timer, func()) {
 func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, timeout <-chan time.Time) error {
 	select {
 	case <-s.shutdownCh:
-		return ErrSessionShutdown
+		return s.shutdownErr
 	default:
 	}
 
@@ -389,7 +389,7 @@ func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, t
 
 	select {
 	case <-s.shutdownCh:
-		return ErrSessionShutdown
+		return s.shutdownErr
 	case s.sendCh <- ready:
 	case <-timeout:
 		// we timed out before the write went across the channel. keep connection open.
@@ -435,7 +435,7 @@ WAIT:
 func (s *Session) sendNoWait(hdr header) error {
 	select {
 	case <-s.shutdownCh:
-		return ErrSessionShutdown
+		return s.shutdownErr
 	default:
 	}
 
@@ -446,7 +446,7 @@ func (s *Session) sendNoWait(hdr header) error {
 	case s.sendCh <- &sendReady{Hdr: hdr, Stage: stageInitial}:
 		return nil
 	case <-s.shutdownCh:
-		return ErrSessionShutdown
+		return s.shutdownErr
 	case <-timer.C:
 		return ErrConnectionWriteTimeout
 	}
