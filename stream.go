@@ -1,7 +1,6 @@
 package yamux
 
 import (
-	"bytes"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -38,35 +37,28 @@ type Stream struct {
 	recvLock sync.Mutex
 	recvBuf  pool.Buffer
 
-	controlErr     chan error
-	controlHdrLock sync.Mutex
-
-	sendErr  chan error
 	sendLock sync.Mutex
 
 	recvNotifyCh chan struct{}
 	sendNotifyCh chan struct{}
 
-	readDeadline  atomic.Value // time.Time
-	writeDeadline atomic.Value // time.Time
+	readDeadline, writeDeadline pipeDeadline
 }
 
 // newStream is used to construct a new stream within
 // a given session for an ID
 func newStream(session *Session, id uint32, state streamState) *Stream {
 	s := &Stream{
-		id:           id,
-		session:      session,
-		state:        state,
-		controlErr:   make(chan error, 1),
-		sendErr:      make(chan error, 1),
-		recvWindow:   initialStreamWindow,
-		sendWindow:   initialStreamWindow,
-		recvNotifyCh: make(chan struct{}, 1),
-		sendNotifyCh: make(chan struct{}, 1),
+		id:            id,
+		session:       session,
+		state:         state,
+		recvWindow:    initialStreamWindow,
+		sendWindow:    initialStreamWindow,
+		readDeadline:  makePipeDeadline(),
+		writeDeadline: makePipeDeadline(),
+		recvNotifyCh:  make(chan struct{}, 1),
+		sendNotifyCh:  make(chan struct{}, 1),
 	}
-	s.readDeadline.Store(time.Time{})
-	s.writeDeadline.Store(time.Time{})
 	return s
 }
 
@@ -118,21 +110,10 @@ START:
 	return n, err
 
 WAIT:
-	var timeout <-chan time.Time
-	returnTimer := func() {}
-	readDeadline := s.readDeadline.Load().(time.Time)
-	if !readDeadline.IsZero() {
-		delay := readDeadline.Sub(time.Now())
-		timer, cancelFunc := pooledTimer(delay)
-		timeout = timer.C
-		returnTimer = cancelFunc
-	}
 	select {
 	case <-s.recvNotifyCh:
-		returnTimer()
 		goto START
-	case <-timeout:
-		returnTimer()
+	case <-s.readDeadline.wait():
 		return 0, ErrTimeout
 	}
 }
@@ -143,16 +124,8 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 	defer s.sendLock.Unlock()
 	total := 0
 
-	var timeout <-chan time.Time
-	writeDeadline := s.writeDeadline.Load().(time.Time)
-	if !writeDeadline.IsZero() {
-		delay := writeDeadline.Sub(time.Now())
-		timer, cancelFunc := pooledTimer(delay)
-		defer cancelFunc()
-		timeout = timer.C
-	}
 	for total < len(b) {
-		n, err := s.write(b[total:], timeout)
+		n, err := s.write(b[total:])
 		total += n
 		if err != nil {
 			return total, err
@@ -163,7 +136,7 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 
 // write is used to write to the stream, may return on
 // a short write.
-func (s *Stream) write(b []byte, timeout <-chan time.Time) (n int, err error) {
+func (s *Stream) write(b []byte) (n int, err error) {
 	var flags uint16
 	var max uint32
 	var hdr header
@@ -196,7 +169,7 @@ START:
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
-	if err = s.session.waitForSendErr(hdr, b[:max], s.sendErr, timeout); err != nil {
+	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait()); err != nil {
 		return 0, err
 	}
 
@@ -210,7 +183,7 @@ WAIT:
 	select {
 	case <-s.sendNotifyCh:
 		goto START
-	case <-timeout:
+	case <-s.writeDeadline.wait():
 		return 0, ErrTimeout
 	}
 }
@@ -235,9 +208,6 @@ func (s *Stream) sendFlags() uint16 {
 // sendWindowUpdate potentially sends a window update enabling
 // further writes to take place. Must be invoked with the lock.
 func (s *Stream) sendWindowUpdate() error {
-	s.controlHdrLock.Lock()
-	defer s.controlHdrLock.Unlock()
-
 	// Determine the delta update
 	max := s.session.config.MaxStreamWindowSize
 	s.recvLock.Lock()
@@ -258,7 +228,7 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Send the header
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
-	if err := s.session.waitForSendErr(hdr, nil, s.controlErr, nil); err != nil {
+	if err := s.session.sendMsg(hdr, nil, nil); err != nil {
 		return err
 	}
 	return nil
@@ -266,22 +236,16 @@ func (s *Stream) sendWindowUpdate() error {
 
 // sendClose is used to send a FIN
 func (s *Stream) sendClose() error {
-	s.controlHdrLock.Lock()
-	defer s.controlHdrLock.Unlock()
-
 	flags := s.sendFlags()
 	flags |= flagFIN
 	hdr := encode(typeWindowUpdate, flags, s.id, 0)
-	return s.session.waitForSendErr(hdr, nil, s.controlErr, nil)
+	return s.session.sendMsg(hdr, nil, nil)
 }
 
 // sendReset is used to send a RST
 func (s *Stream) sendReset() error {
-	s.controlHdrLock.Lock()
-	defer s.controlHdrLock.Unlock()
-
 	hdr := encode(typeWindowUpdate, flagRST, s.id, 0)
-	return s.session.waitForSendErr(hdr, nil, s.controlErr, nil)
+	return s.session.sendMsg(hdr, nil, nil)
 }
 
 // Reset resets the stream (forcibly closes the stream)
@@ -306,7 +270,7 @@ func (s *Stream) Reset() error {
 
 	err := s.sendReset()
 	s.notifyWaiting()
-	s.session.closeStream(s.id)
+	s.cleanup()
 
 	return err
 }
@@ -338,7 +302,7 @@ SEND_CLOSE:
 	err := s.sendClose()
 	s.notifyWaiting()
 	if closeStream {
-		s.session.closeStream(s.id)
+		s.cleanup()
 	}
 	return err
 }
@@ -355,6 +319,16 @@ func (s *Stream) forceClose() {
 	}
 	s.stateLock.Unlock()
 	s.notifyWaiting()
+
+	s.readDeadline.set(time.Time{})
+	s.readDeadline.set(time.Time{})
+}
+
+// called when fully closed to release any system resources.
+func (s *Stream) cleanup() {
+	s.session.closeStream(s.id)
+	s.readDeadline.set(time.Time{})
+	s.readDeadline.set(time.Time{})
 }
 
 // processFlags is used to update the state of the stream
@@ -364,7 +338,7 @@ func (s *Stream) processFlags(flags uint16) error {
 	closeStream := false
 	defer func() {
 		if closeStream {
-			s.session.closeStream(s.id)
+			s.cleanup()
 		}
 	}()
 
@@ -472,13 +446,25 @@ func (s *Stream) SetDeadline(t time.Time) error {
 
 // SetReadDeadline sets the deadline for future Read calls.
 func (s *Stream) SetReadDeadline(t time.Time) error {
-	s.readDeadline.Store(t)
+	s.stateLock.Lock()
+	defer s.stateLock.Unlock()
+	switch s.state {
+	case streamClosed, streamRemoteClose, streamReset:
+		return nil
+	}
+	s.readDeadline.set(t)
 	return nil
 }
 
 // SetWriteDeadline sets the deadline for future Write calls
 func (s *Stream) SetWriteDeadline(t time.Time) error {
-	s.writeDeadline.Store(t)
+	s.stateLock.Lock()
+	defer s.stateLock.Unlock()
+	switch s.state {
+	case streamClosed, streamLocalClose, streamReset:
+		return nil
+	}
+	s.writeDeadline.set(t)
 	return nil
 }
 
