@@ -61,9 +61,8 @@ type Session struct {
 	// acceptCh is used to pass ready streams to the client
 	acceptCh chan *Stream
 
-	// sendCh is used to mark a stream as ready to send,
-	// or to send a header out directly.
-	sendCh chan *sendReady
+	// sendCh is used to send messages
+	sendCh chan sendReady
 
 	// recvDoneCh is closed when recv() exits to avoid a race
 	// between stream registration and stream shutdown
@@ -87,7 +86,7 @@ type Session struct {
 // sendReady is used to either mark a stream as ready
 // or to directly send a header
 type sendReady struct {
-	Hdr   []byte
+	Hdr   header
 	Body  io.Reader
 	Err   chan error
 	Stage uint32
@@ -115,7 +114,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool, readBuf in
 		inflight:   make(map[uint32]struct{}),
 		synCh:      make(chan struct{}, config.AcceptBacklog),
 		acceptCh:   make(chan *Stream, config.AcceptBacklog),
-		sendCh:     make(chan *sendReady, 64),
+		sendCh:     make(chan sendReady, 64),
 		recvDoneCh: make(chan struct{}),
 		sendDoneCh: make(chan struct{}),
 		shutdownCh: make(chan struct{}),
@@ -281,8 +280,7 @@ func (s *Session) GoAway() error {
 // goAway is used to send a goAway message
 func (s *Session) goAway(reason uint32) header {
 	atomic.SwapInt32(&s.localGoAway, 1)
-	hdr := header(make([]byte, headerSize))
-	hdr.encode(typeGoAway, 0, 0, reason)
+	hdr := encode(typeGoAway, 0, 0, reason)
 	return hdr
 }
 
@@ -299,8 +297,7 @@ func (s *Session) Ping() (time.Duration, error) {
 	s.pingLock.Unlock()
 
 	// Send the ping request
-	hdr := header(make([]byte, headerSize))
-	hdr.encode(typePing, flagSYN, 0, id)
+	hdr := encode(typePing, flagSYN, 0, id)
 	if err := s.waitForSend(hdr, nil); err != nil {
 		return 0, err
 	}
@@ -385,7 +382,7 @@ func (s *Session) waitForSendErr(hdr header, body io.Reader, errCh chan error, t
 		connWriteTimerCh = t.C
 	}
 
-	ready := &sendReady{Hdr: hdr, Body: body, Err: errCh, Stage: stageInitial}
+	ready := sendReady{Hdr: hdr, Body: body, Err: errCh, Stage: stageInitial}
 
 	select {
 	case <-s.shutdownCh:
@@ -443,7 +440,7 @@ func (s *Session) sendNoWait(hdr header) error {
 	defer cancelFn()
 
 	select {
-	case s.sendCh <- &sendReady{Hdr: hdr, Stage: stageInitial}:
+	case s.sendCh <- sendReady{Hdr: hdr, Stage: stageInitial}:
 		return nil
 	case <-s.shutdownCh:
 		return s.shutdownErr
@@ -476,18 +473,15 @@ func (s *Session) sendLoop() error {
 				continue
 			}
 
-			// Send a header if ready
-			if ready.Hdr != nil {
-				sent := 0
-				for sent < len(ready.Hdr) {
-					n, err := s.conn.Write(ready.Hdr[sent:])
-					if err != nil {
-						s.logger.Printf("[ERR] yamux: Failed to write header: %v", err)
-						asyncSendErr(ready.Err, err)
-						return err
-					}
-					sent += n
+			sent := 0
+			for sent < len(ready.Hdr) {
+				n, err := s.conn.Write(ready.Hdr[sent:])
+				if err != nil {
+					s.logger.Printf("[ERR] yamux: Failed to write header: %v", err)
+					asyncSendErr(ready.Err, err)
+					return err
 				}
+				sent += n
 			}
 
 			// Send data from a body if given
@@ -529,10 +523,10 @@ var (
 // recvLoop continues to receive data until a fatal error is encountered
 func (s *Session) recvLoop() error {
 	defer close(s.recvDoneCh)
-	hdr := header(make([]byte, headerSize))
+	var hdr header
 	for {
 		// Read the header
-		if _, err := io.ReadFull(s.reader, hdr); err != nil {
+		if _, err := io.ReadFull(s.reader, hdr[:]); err != nil {
 			if err != io.EOF && !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "reset by peer") {
 				s.logger.Printf("[ERR] yamux: Failed to read header: %v", err)
 			}
@@ -617,8 +611,7 @@ func (s *Session) handlePing(hdr header) error {
 	// don't interfere with the receiving thread blocking for the write.
 	if flags&flagSYN == flagSYN {
 		go func() {
-			hdr := header(make([]byte, headerSize))
-			hdr.encode(typePing, flagACK, 0, pingID)
+			hdr := encode(typePing, flagACK, 0, pingID)
 			if err := s.sendNoWait(hdr); err != nil {
 				s.logger.Printf("[WARN] yamux: failed to send ping reply: %v", err)
 			}
@@ -664,8 +657,7 @@ func (s *Session) incomingStream(id uint32) error {
 	}
 	// Reject immediately if we are doing a go away
 	if atomic.LoadInt32(&s.localGoAway) == 1 {
-		hdr := header(make([]byte, headerSize))
-		hdr.encode(typeWindowUpdate, flagRST, id, 0)
+		hdr := encode(typeWindowUpdate, flagRST, id, 0)
 		return s.sendNoWait(hdr)
 	}
 
@@ -695,8 +687,8 @@ func (s *Session) incomingStream(id uint32) error {
 		// Backlog exceeded! RST the stream
 		s.logger.Printf("[WARN] yamux: backlog exceeded, forcing connection reset")
 		delete(s.streams, id)
-		stream.sendHdr.encode(typeWindowUpdate, flagRST, id, 0)
-		return s.sendNoWait(stream.sendHdr)
+		hdr := encode(typeWindowUpdate, flagRST, id, 0)
+		return s.sendNoWait(hdr)
 	}
 }
 

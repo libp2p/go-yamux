@@ -51,8 +51,7 @@ func TestConst(t *testing.T) {
 }
 
 func TestEncodeDecode(t *testing.T) {
-	hdr := header(make([]byte, headerSize))
-	hdr.encode(typeWindowUpdate, flagACK|flagRST, 1234, 4321)
+	hdr := encode(typeWindowUpdate, flagACK|flagRST, 1234, 4321)
 
 	if hdr.Version() != protoVersion {
 		t.Fatalf("bad: %v", hdr)

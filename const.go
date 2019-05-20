@@ -138,7 +138,7 @@ const (
 		sizeOfStreamID + sizeOfLength
 )
 
-type header []byte
+type header [headerSize]byte
 
 func (h header) Version() uint8 {
 	return h[0]
@@ -165,10 +165,12 @@ func (h header) String() string {
 		h.Version(), h.MsgType(), h.Flags(), h.StreamID(), h.Length())
 }
 
-func (h header) encode(msgType uint8, flags uint16, streamID uint32, length uint32) {
+func encode(msgType uint8, flags uint16, streamID uint32, length uint32) header {
+	var h header
 	h[0] = protoVersion
 	h[1] = msgType
 	binary.BigEndian.PutUint16(h[2:4], flags)
 	binary.BigEndian.PutUint32(h[4:8], streamID)
 	binary.BigEndian.PutUint32(h[8:12], length)
+	return h
 }
