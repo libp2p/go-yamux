@@ -115,6 +115,8 @@ const (
 const (
 	// initialStreamWindow is the initial stream window size
 	initialStreamWindow uint32 = 256 * 1024
+
+	maxMessageSize = 16 * 1024 // 16 KiB per write max.
 )
 
 const (

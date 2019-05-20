@@ -1194,7 +1194,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 
 	wg.Wait()
 
-	_, err = io.ReadFull(stream, make([]byte, flood/2+1))
+	_, err = io.ReadFull(stream, make([]byte, flood/2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1202,7 +1202,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	time.Sleep(1 * time.Millisecond)
 
 	sendWindow := atomic.LoadUint32(&wr.sendWindow)
-	if exp := uint32(flood/2 + 1); sendWindow != exp {
+	if exp := uint32(flood / 2); sendWindow != exp {
 		t.Errorf("sendWindow: exp=%d, got=%d", exp, sendWindow)
 	}
 }

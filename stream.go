@@ -164,8 +164,8 @@ START:
 	// Determine the flags if any
 	flags = s.sendFlags()
 
-	// Send up to our send window
-	max = min(window, uint32(len(b)))
+	// Send up to min(message, window
+	max = min(window, maxMessageSize, uint32(len(b)))
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
