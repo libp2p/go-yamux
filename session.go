@@ -375,12 +375,43 @@ func (s *Session) send() {
 	}
 }
 
+var writeBufferPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewWriter(nil)
+	},
+}
+
+func getBuffer(w io.Writer) *bufio.Writer {
+	wb := writeBufferPool.Get().(*bufio.Writer)
+	wb.Reset(w)
+	return wb
+}
+
+func returnBuffer(wb *bufio.Writer) {
+	if wb == nil {
+		return
+	}
+	wb.Reset(nil)
+	writeBufferPool.Put(wb)
+}
+
 func (s *Session) sendLoop() error {
 	defer close(s.sendDoneCh)
 
+	var lastWriteDeadline time.Time
 	extendWriteDeadline := func() error {
-		return s.conn.SetWriteDeadline(time.Now().Add(s.config.ConnectionWriteTimeout))
+		now := time.Now()
+		// If over half of the deadline has elapsed, extend it.
+		if now.Add(s.config.ConnectionWriteTimeout / 2).After(lastWriteDeadline) {
+			lastWriteDeadline = now.Add(s.config.ConnectionWriteTimeout)
+			return s.conn.SetWriteDeadline(lastWriteDeadline)
+		}
+		return nil
 	}
+
+	writer := getBuffer(s.conn)
+	// avoid capturing writer by-value, it changes.
+	defer func() { returnBuffer(writer) }()
 
 	for {
 		// yield after processing the last message, if we've shutdown.
@@ -390,33 +421,48 @@ func (s *Session) sendLoop() error {
 			return nil
 		default:
 		}
+
+		var ready sendReady
 		select {
-		case ready := <-s.sendCh:
-			if err := extendWriteDeadline(); err != nil {
+		case ready = <-s.sendCh:
+		default:
+			if err := writer.Flush(); err != nil {
 				return err
 			}
-			_, err := s.conn.Write(ready.Hdr[:])
+			returnBuffer(writer)
+			writer = nil
+
+			select {
+			case ready = <-s.sendCh:
+			case <-s.shutdownCh:
+				return nil
+			}
+
+			writer = getBuffer(s.conn)
+		}
+
+		if err := extendWriteDeadline(); err != nil {
+			return err
+		}
+
+		_, err := writer.Write(ready.Hdr[:])
+		if err != nil {
+			if isTimeout(err) {
+				err = ErrConnectionWriteTimeout
+			}
+			return err
+		}
+
+		// Send data from a body if given
+		if len(ready.Body) > 0 {
+			_, err := writer.Write(ready.Body)
 			if err != nil {
 				if isTimeout(err) {
 					err = ErrConnectionWriteTimeout
 				}
 				return err
 			}
-
-			// Send data from a body if given
-			if len(ready.Body) > 0 {
-				_, err := s.conn.Write(ready.Body)
-				if err != nil {
-					if isTimeout(err) {
-						err = ErrConnectionWriteTimeout
-					}
-					return err
-				}
-			}
-		case <-s.shutdownCh:
-			return nil
 		}
-
 	}
 }
 
