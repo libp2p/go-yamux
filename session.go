@@ -362,6 +362,8 @@ func (s *Session) send() {
 	}
 }
 
+// keep a pool of buffered writers so we don't have to keep them around in
+// memory when not using them.
 var writeBufferPool = sync.Pool{
 	New: func() interface{} {
 		return bufio.NewWriter(nil)
@@ -385,6 +387,9 @@ func returnBuffer(wb *bufio.Writer) {
 func (s *Session) sendLoop() error {
 	defer close(s.sendDoneCh)
 
+	// Extend the write deadline if we've passed the halfway point. This can
+	// be expensive so this ensures we only have to do this once every
+	// ConnectionWriteTimeout/2 (usually 5s).
 	var lastWriteDeadline time.Time
 	extendWriteDeadline := func() error {
 		now := time.Now()
@@ -413,6 +418,10 @@ func (s *Session) sendLoop() error {
 		select {
 		case buf = <-s.sendCh:
 		default:
+
+			// nothing to send, flush the writer, return it, and
+			// wait for something to send.
+
 			if err := writer.Flush(); err != nil {
 				return err
 			}
