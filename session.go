@@ -330,21 +330,6 @@ func (s *Session) keepalive() {
 	}
 }
 
-func pooledTimer(d time.Duration) (*time.Timer, func()) {
-	t := timerPool.Get()
-	timer := t.(*time.Timer)
-	timer.Reset(d)
-	cancelFn := func() {
-		timer.Stop()
-		select {
-		case <-timer.C:
-		default:
-		}
-		timerPool.Put(t)
-	}
-	return timer, cancelFn
-}
-
 // send sends the header and body.
 func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) error {
 	select {
