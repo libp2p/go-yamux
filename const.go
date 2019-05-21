@@ -116,7 +116,12 @@ const (
 	// initialStreamWindow is the initial stream window size
 	initialStreamWindow uint32 = 256 * 1024
 
-	maxMessageSize = 16 * 1024 // 16 KiB per write max.
+	// maxMessageSize is the maximum amount of data we'll send in a single message.
+	// 64KiB - header
+	//
+	// Given a ConnectionWriteTimeout of 10s, this means we kill the
+	// connection if we drop below 52kbps = 6.4KiB/s.
+	maxMessageSize = 64*1024 - headerSize
 )
 
 const (
