@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/libp2p/go-buffer-pool"
 )
 
 // Session is used to wrap a reliable ordered connection and to
@@ -62,7 +64,7 @@ type Session struct {
 	acceptCh chan *Stream
 
 	// sendCh is used to send messages
-	sendCh chan sendReady
+	sendCh chan []byte
 
 	// recvDoneCh is closed when recv() exits to avoid a race
 	// between stream registration and stream shutdown
@@ -81,13 +83,6 @@ type Session struct {
 	shutdownErr  error
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
-}
-
-// sendReady is used to either mark a stream as ready
-// or to directly send a header
-type sendReady struct {
-	Hdr  header
-	Body []byte
 }
 
 const (
@@ -112,7 +107,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 		inflight:   make(map[uint32]struct{}),
 		synCh:      make(chan struct{}, config.AcceptBacklog),
 		acceptCh:   make(chan *Stream, config.AcceptBacklog),
-		sendCh:     make(chan sendReady, 64),
+		sendCh:     make(chan []byte, 64),
 		recvDoneCh: make(chan struct{}),
 		sendDoneCh: make(chan struct{}),
 		shutdownCh: make(chan struct{}),
@@ -358,12 +353,19 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 	default:
 	}
 
+	// duplicate as we're sending this async.
+	buf := pool.Get(headerSize + len(body))
+	copy(buf[:headerSize], hdr[:])
+	copy(buf[headerSize:], body)
+
 	select {
 	case <-s.shutdownCh:
+		pool.Put(buf)
 		return s.shutdownErr
-	case s.sendCh <- sendReady{hdr, body}:
+	case s.sendCh <- buf:
 		return nil
 	case <-deadline:
+		pool.Put(buf)
 		return ErrTimeout
 	}
 }
@@ -422,9 +424,9 @@ func (s *Session) sendLoop() error {
 		default:
 		}
 
-		var ready sendReady
+		var buf []byte
 		select {
-		case ready = <-s.sendCh:
+		case buf = <-s.sendCh:
 		default:
 			if err := writer.Flush(); err != nil {
 				return err
@@ -433,7 +435,7 @@ func (s *Session) sendLoop() error {
 			writer = nil
 
 			select {
-			case ready = <-s.sendCh:
+			case buf = <-s.sendCh:
 			case <-s.shutdownCh:
 				return nil
 			}
@@ -442,26 +444,18 @@ func (s *Session) sendLoop() error {
 		}
 
 		if err := extendWriteDeadline(); err != nil {
+			pool.Put(buf)
 			return err
 		}
 
-		_, err := writer.Write(ready.Hdr[:])
+		_, err := writer.Write(buf)
+		pool.Put(buf)
+
 		if err != nil {
 			if isTimeout(err) {
 				err = ErrConnectionWriteTimeout
 			}
 			return err
-		}
-
-		// Send data from a body if given
-		if len(ready.Body) > 0 {
-			_, err := writer.Write(ready.Body)
-			if err != nil {
-				if isTimeout(err) {
-					err = ErrConnectionWriteTimeout
-				}
-				return err
-			}
 		}
 	}
 }
