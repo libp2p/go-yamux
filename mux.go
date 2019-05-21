@@ -60,7 +60,7 @@ func DefaultConfig() *Config {
 		LogOutput:              os.Stderr,
 		ReadBufSize:            4096,
 		MaxMessageSize:         64 * 1024, // Means 64KiB/10s = 52kbps minimum speed.
-		WriteCoalesceDelay:     10 * time.Microsecond,
+		WriteCoalesceDelay:     100 * time.Microsecond,
 	}
 }
 
