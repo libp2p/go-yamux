@@ -405,6 +405,9 @@ func (s *Session) sendLoop() error {
 	// avoid capturing writer by-value, it changes.
 	defer func() { returnBuffer(writer) }()
 
+	writeTimeout := time.NewTimer(1 * time.Millisecond)
+	defer writeTimeout.Stop()
+
 	for {
 		// yield after processing the last message, if we've shutdown.
 		// s.sendCh is a buffered channel and Go doesn't guarantee select order.
@@ -414,30 +417,35 @@ func (s *Session) sendLoop() error {
 		default:
 		}
 
+		// Flushes at least once every 100 microseconds unless we're
+		// constantly writing.
 		var buf []byte
 		select {
 		case buf = <-s.sendCh:
 		default:
-
-			// nothing to send, flush the writer, return it, and
-			// wait for something to send.
-
-			if err := writer.Flush(); err != nil {
-				if isTimeout(err) {
-					err = ErrConnectionWriteTimeout
-				}
-				return err
-			}
-			returnBuffer(writer)
-			writer = nil
-
 			select {
 			case buf = <-s.sendCh:
 			case <-s.shutdownCh:
 				return nil
-			}
+			case <-writeTimeout.C:
+				if err := writer.Flush(); err != nil {
+					if isTimeout(err) {
+						err = ErrConnectionWriteTimeout
+					}
+					return err
+				}
+				returnBuffer(writer)
+				writer = nil
 
-			writer = getBuffer(s.conn)
+				select {
+				case buf = <-s.sendCh:
+				case <-s.shutdownCh:
+					return nil
+				}
+
+				writer = getBuffer(s.conn)
+				writeTimeout.Reset(100 * time.Microsecond)
+			}
 		}
 
 		if err := extendWriteDeadline(); err != nil {
