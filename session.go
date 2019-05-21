@@ -405,7 +405,7 @@ func (s *Session) sendLoop() error {
 	// avoid capturing writer by-value, it changes.
 	defer func() { returnBuffer(writer) }()
 
-	writeTimeout := time.NewTimer(1 * time.Millisecond)
+	writeTimeout := time.NewTimer(s.config.WriteCoalesceDelay)
 	defer writeTimeout.Stop()
 
 	for {
@@ -444,7 +444,7 @@ func (s *Session) sendLoop() error {
 				}
 
 				writer = getBuffer(s.conn)
-				writeTimeout.Reset(100 * time.Microsecond)
+				writeTimeout.Reset(s.config.WriteCoalesceDelay)
 			}
 		}
 

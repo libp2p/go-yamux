@@ -165,7 +165,7 @@ START:
 	flags = s.sendFlags()
 
 	// Send up to min(message, window
-	max = min(window, maxMessageSize, uint32(len(b)))
+	max = min(window, s.session.config.MaxMessageSize-headerSize, uint32(len(b)))
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
