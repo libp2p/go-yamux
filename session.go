@@ -362,28 +362,6 @@ func (s *Session) send() {
 	}
 }
 
-// keep a pool of buffered writers so we don't have to keep them around in
-// memory when not using them.
-var writeBufferPool = sync.Pool{
-	New: func() interface{} {
-		return bufio.NewWriter(nil)
-	},
-}
-
-func getBuffer(w io.Writer) *bufio.Writer {
-	wb := writeBufferPool.Get().(*bufio.Writer)
-	wb.Reset(w)
-	return wb
-}
-
-func returnBuffer(wb *bufio.Writer) {
-	if wb == nil {
-		return
-	}
-	wb.Reset(nil)
-	writeBufferPool.Put(wb)
-}
-
 func (s *Session) sendLoop() error {
 	defer close(s.sendDoneCh)
 
@@ -401,9 +379,7 @@ func (s *Session) sendLoop() error {
 		return nil
 	}
 
-	writer := getBuffer(s.conn)
-	// avoid capturing writer by-value, it changes.
-	defer func() { returnBuffer(writer) }()
+	writer := pool.Writer{W: s.conn}
 
 	var writeTimeout *time.Timer
 	var writeTimeoutCh <-chan time.Time
@@ -444,8 +420,6 @@ func (s *Session) sendLoop() error {
 					}
 					return err
 				}
-				returnBuffer(writer)
-				writer = nil
 
 				select {
 				case buf = <-s.sendCh:
@@ -453,7 +427,6 @@ func (s *Session) sendLoop() error {
 					return nil
 				}
 
-				writer = getBuffer(s.conn)
 				if writeTimeout != nil {
 					writeTimeout.Reset(s.config.WriteCoalesceDelay)
 				}
