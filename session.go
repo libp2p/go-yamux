@@ -423,6 +423,9 @@ func (s *Session) sendLoop() error {
 			// wait for something to send.
 
 			if err := writer.Flush(); err != nil {
+				if isTimeout(err) {
+					err = ErrConnectionWriteTimeout
+				}
 				return err
 			}
 			returnBuffer(writer)
