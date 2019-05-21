@@ -405,8 +405,18 @@ func (s *Session) sendLoop() error {
 	// avoid capturing writer by-value, it changes.
 	defer func() { returnBuffer(writer) }()
 
-	writeTimeout := time.NewTimer(s.config.WriteCoalesceDelay)
-	defer writeTimeout.Stop()
+	var writeTimeout *time.Timer
+	var writeTimeoutCh <-chan time.Time
+	if s.config.WriteCoalesceDelay > 0 {
+		writeTimeout = time.NewTimer(s.config.WriteCoalesceDelay)
+		defer writeTimeout.Stop()
+
+		writeTimeoutCh = writeTimeout.C
+	} else {
+		ch := make(chan time.Time)
+		close(ch)
+		writeTimeoutCh = ch
+	}
 
 	for {
 		// yield after processing the last message, if we've shutdown.
@@ -427,7 +437,7 @@ func (s *Session) sendLoop() error {
 			case buf = <-s.sendCh:
 			case <-s.shutdownCh:
 				return nil
-			case <-writeTimeout.C:
+			case <-writeTimeoutCh:
 				if err := writer.Flush(); err != nil {
 					if isTimeout(err) {
 						err = ErrConnectionWriteTimeout
@@ -444,7 +454,9 @@ func (s *Session) sendLoop() error {
 				}
 
 				writer = getBuffer(s.conn)
-				writeTimeout.Reset(s.config.WriteCoalesceDelay)
+				if writeTimeout != nil {
+					writeTimeout.Reset(s.config.WriteCoalesceDelay)
+				}
 			}
 		}
 
