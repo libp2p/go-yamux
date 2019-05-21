@@ -1,6 +1,7 @@
 package yamux
 
 import (
+	"io"
 	"testing"
 )
 
@@ -60,7 +61,7 @@ func BenchmarkSendRecv(b *testing.B) {
 		}
 		defer stream.Close()
 		for i := 0; i < b.N; i++ {
-			if _, err := stream.Read(recvBuf); err != nil {
+			if _, err := io.ReadFull(stream, recvBuf); err != nil {
 				b.Fatalf("err: %v", err)
 			}
 		}
@@ -101,7 +102,7 @@ func BenchmarkSendRecvLarge(b *testing.B) {
 		defer stream.Close()
 		for i := 0; i < b.N; i++ {
 			for j := 0; j < sendSize/recvSize; j++ {
-				if _, err := stream.Read(recvBuf); err != nil {
+				if _, err := io.ReadFull(stream, recvBuf); err != nil {
 					b.Fatalf("err: %v", err)
 				}
 			}
