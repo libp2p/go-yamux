@@ -22,7 +22,7 @@ Yamux features include:
 
 ## Documentation
 
-For complete documentation, see the associated [Godoc](http://godoc.org/github.com/hashicorp/yamux).
+For complete documentation, see the associated [Godoc](http://godoc.org/github.com/libp2p/go-yamux).
 
 ## Specification
 

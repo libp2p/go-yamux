@@ -1,4 +1,4 @@
-module github.com/whyrusleeping/yamux
+module github.com/libp2p/go-yamux
 
 go 1.12
 
