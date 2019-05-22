@@ -83,6 +83,11 @@ type Session struct {
 	shutdownErr  error
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
+
+	// keepaliveTimer is a periodic timer for keepalive messages. It's nil
+	// when keepalives are disabled.
+	keepaliveLock  sync.Mutex
+	keepaliveTimer *time.Timer
 }
 
 const (
@@ -117,11 +122,11 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 	} else {
 		s.nextStreamID = 2
 	}
+	if config.EnableKeepAlive {
+		s.startKeepalive()
+	}
 	go s.recv()
 	go s.send()
-	if config.EnableKeepAlive {
-		go s.keepalive()
-	}
 	return s
 }
 
@@ -242,6 +247,7 @@ func (s *Session) Close() error {
 	}
 	close(s.shutdownCh)
 	s.conn.Close()
+	s.stopKeepalive()
 	<-s.recvDoneCh
 	<-s.sendDoneCh
 
@@ -312,21 +318,38 @@ func (s *Session) Ping() (time.Duration, error) {
 	return time.Now().Sub(start), nil
 }
 
-// keepalive is a long running goroutine that periodically does
-// a ping to keep the connection alive.
-func (s *Session) keepalive() {
-	for {
-		select {
-		case <-time.After(s.config.KeepAliveInterval):
-			_, err := s.Ping()
-			if err != nil {
-				s.logger.Printf("[ERR] yamux: keepalive failed: %v", err)
-				s.exitErr(ErrKeepAliveTimeout)
-				return
-			}
-		case <-s.shutdownCh:
+// startKeepalive starts the keepalive process.
+func (s *Session) startKeepalive() {
+	s.keepaliveLock.Lock()
+	defer s.keepaliveLock.Unlock()
+	s.keepaliveTimer = time.AfterFunc(s.config.KeepAliveInterval, func() {
+		s.keepaliveLock.Lock()
+
+		if s.keepaliveTimer == nil {
+			s.keepaliveLock.Unlock()
+			// keepalives have been stopped.
 			return
 		}
+		_, err := s.Ping()
+		if err != nil {
+			// Make sure to unlock before exiting so we don't
+			// deadlock trying to shutdown keepalives.
+			s.keepaliveLock.Unlock()
+			s.logger.Printf("[ERR] yamux: keepalive failed: %v", err)
+			s.exitErr(ErrKeepAliveTimeout)
+			return
+		}
+		s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
+		s.keepaliveLock.Unlock()
+	})
+}
+
+// stopKeepalive stops the keepalive process.
+func (s *Session) stopKeepalive() {
+	s.keepaliveLock.Lock()
+	defer s.keepaliveLock.Unlock()
+	if s.keepaliveTimer != nil {
+		s.keepaliveTimer.Stop()
 	}
 }
 
