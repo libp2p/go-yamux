@@ -29,8 +29,3 @@ func min(values ...uint32) uint32 {
 	}
 	return m
 }
-
-func isTimeout(err error) bool {
-	terr, ok := err.(interface{ Timeout() bool })
-	return ok && terr.Timeout()
-}
