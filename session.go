@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -438,7 +439,7 @@ func (s *Session) sendLoop() error {
 				return nil
 			case <-writeTimeoutCh:
 				if err := writer.Flush(); err != nil {
-					if isTimeout(err) {
+					if os.IsTimeout(err) {
 						err = ErrConnectionWriteTimeout
 					}
 					return err
@@ -465,7 +466,7 @@ func (s *Session) sendLoop() error {
 		pool.Put(buf)
 
 		if err != nil {
-			if isTimeout(err) {
+			if os.IsTimeout(err) {
 				err = ErrConnectionWriteTimeout
 			}
 			return err
