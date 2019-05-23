@@ -403,25 +403,20 @@ func (s *Session) sendLoop() error {
 		return nil
 	}
 
-	writer := s.conn
+	writer := pool.Writer{W: s.conn}
 
-	// FIXME: https://github.com/libp2p/go-libp2p/issues/644
-	// Write coalescing is disabled for now.
+	var writeTimeout *time.Timer
+	var writeTimeoutCh <-chan time.Time
+	if s.config.WriteCoalesceDelay > 0 {
+		writeTimeout = time.NewTimer(s.config.WriteCoalesceDelay)
+		defer writeTimeout.Stop()
 
-	//writer := pool.Writer{W: s.conn}
-
-	//var writeTimeout *time.Timer
-	//var writeTimeoutCh <-chan time.Time
-	//if s.config.WriteCoalesceDelay > 0 {
-	//	writeTimeout = time.NewTimer(s.config.WriteCoalesceDelay)
-	//	defer writeTimeout.Stop()
-
-	//	writeTimeoutCh = writeTimeout.C
-	//} else {
-	//	ch := make(chan time.Time)
-	//	close(ch)
-	//	writeTimeoutCh = ch
-	//}
+		writeTimeoutCh = writeTimeout.C
+	} else {
+		ch := make(chan time.Time)
+		close(ch)
+		writeTimeoutCh = ch
+	}
 
 	for {
 		// yield after processing the last message, if we've shutdown.
@@ -439,29 +434,29 @@ func (s *Session) sendLoop() error {
 		case buf = <-s.sendCh:
 		case <-s.shutdownCh:
 			return nil
-			//default:
-			//	select {
-			//	case buf = <-s.sendCh:
-			//	case <-s.shutdownCh:
-			//		return nil
-			//	case <-writeTimeoutCh:
-			//		if err := writer.Flush(); err != nil {
-			//			if os.IsTimeout(err) {
-			//				err = ErrConnectionWriteTimeout
-			//			}
-			//			return err
-			//		}
+		default:
+			select {
+			case buf = <-s.sendCh:
+			case <-s.shutdownCh:
+				return nil
+			case <-writeTimeoutCh:
+				if err := writer.Flush(); err != nil {
+					if os.IsTimeout(err) {
+						err = ErrConnectionWriteTimeout
+					}
+					return err
+				}
 
-			//		select {
-			//		case buf = <-s.sendCh:
-			//		case <-s.shutdownCh:
-			//			return nil
-			//		}
+				select {
+				case buf = <-s.sendCh:
+				case <-s.shutdownCh:
+					return nil
+				}
 
-			//		if writeTimeout != nil {
-			//			writeTimeout.Reset(s.config.WriteCoalesceDelay)
-			//		}
-			//	}
+				if writeTimeout != nil {
+					writeTimeout.Reset(s.config.WriteCoalesceDelay)
+				}
+			}
 		}
 
 		if err := extendWriteDeadline(); err != nil {
