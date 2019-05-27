@@ -220,14 +220,18 @@ func (s *Session) Accept() (net.Conn, error) {
 // AcceptStream is used to block until the next available stream
 // is ready to be accepted.
 func (s *Session) AcceptStream() (*Stream, error) {
-	select {
-	case stream := <-s.acceptCh:
-		if err := stream.sendWindowUpdate(); err != nil {
-			return nil, err
+	for {
+		select {
+		case stream := <-s.acceptCh:
+			if err := stream.sendWindowUpdate(); err != nil {
+				// don't return accept errors.
+				s.logger.Printf("[WARN] error sending window update before accepting: %s", err)
+				continue
+			}
+			return stream, nil
+		case <-s.shutdownCh:
+			return nil, s.shutdownErr
 		}
-		return stream, nil
-	case <-s.shutdownCh:
-		return nil, s.shutdownErr
 	}
 }
 
