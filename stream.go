@@ -77,22 +77,22 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 	defer asyncNotify(s.recvNotifyCh)
 START:
 	s.stateLock.Lock()
-	switch s.state {
+	state := s.state
+	s.stateLock.Unlock()
+
+	switch state {
 	case streamRemoteClose:
 		fallthrough
 	case streamClosed:
 		s.recvLock.Lock()
-		if s.recvBuf.Len() == 0 {
-			s.recvLock.Unlock()
-			s.stateLock.Unlock()
+		empty := s.recvBuf.Len() == 0
+		s.recvLock.Unlock()
+		if empty {
 			return 0, io.EOF
 		}
-		s.recvLock.Unlock()
 	case streamReset:
-		s.stateLock.Unlock()
 		return 0, ErrConnectionReset
 	}
-	s.stateLock.Unlock()
 
 	// If there is no data available, block
 	s.recvLock.Lock()
@@ -143,17 +143,17 @@ func (s *Stream) write(b []byte) (n int, err error) {
 
 START:
 	s.stateLock.Lock()
-	switch s.state {
+	state := s.state
+	s.stateLock.Unlock()
+
+	switch state {
 	case streamLocalClose:
 		fallthrough
 	case streamClosed:
-		s.stateLock.Unlock()
 		return 0, ErrStreamClosed
 	case streamReset:
-		s.stateLock.Unlock()
 		return 0, ErrConnectionReset
 	}
-	s.stateLock.Unlock()
 
 	// If there is no data available, block
 	window := atomic.LoadUint32(&s.sendWindow)
@@ -208,13 +208,13 @@ func (s *Stream) sendFlags() uint16 {
 // sendWindowUpdate potentially sends a window update enabling
 // further writes to take place. Must be invoked with the lock.
 func (s *Stream) sendWindowUpdate() error {
+	// Determine the flags if any
+	flags := s.sendFlags()
+
 	// Determine the delta update
 	max := s.session.config.MaxStreamWindowSize
 	s.recvLock.Lock()
 	delta := (max - uint32(s.recvBuf.Len())) - s.recvWindow
-
-	// Determine the flags if any
-	flags := s.sendFlags()
 
 	// Check if we can omit the update
 	if delta < (max/2) && flags == 0 {
