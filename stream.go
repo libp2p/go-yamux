@@ -77,22 +77,22 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 	defer asyncNotify(s.recvNotifyCh)
 START:
 	s.stateLock.Lock()
-	switch s.state {
+	state := s.state
+	s.stateLock.Unlock()
+
+	switch state {
 	case streamRemoteClose:
 		fallthrough
 	case streamClosed:
 		s.recvLock.Lock()
-		if s.recvBuf.Len() == 0 {
-			s.recvLock.Unlock()
-			s.stateLock.Unlock()
+		empty := s.recvBuf.Len() == 0
+		s.recvLock.Unlock()
+		if empty {
 			return 0, io.EOF
 		}
-		s.recvLock.Unlock()
 	case streamReset:
-		s.stateLock.Unlock()
 		return 0, ErrConnectionReset
 	}
-	s.stateLock.Unlock()
 
 	// If there is no data available, block
 	s.recvLock.Lock()
