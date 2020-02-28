@@ -91,7 +91,7 @@ START:
 			return 0, io.EOF
 		}
 	case streamReset:
-		return 0, ErrConnectionReset
+		return 0, ErrStreamReset
 	}
 
 	// If there is no data available, block
@@ -152,7 +152,7 @@ START:
 	case streamClosed:
 		return 0, ErrStreamClosed
 	case streamReset:
-		return 0, ErrConnectionReset
+		return 0, ErrStreamReset
 	}
 
 	// If there is no data available, block
