@@ -508,6 +508,14 @@ func (s *Session) recvLoop() error {
 			return err
 		}
 
+		// Reset the keepalive timer every time we receive data.
+		// There's no reason to keepalive if we're active. Worse, if the
+		// peer is busy sending us stuff, the pong might get stuck
+		// behind a bunch of data.
+		if s.keepaliveTimer != nil {
+			s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
+		}
+
 		// Verify the version
 		if hdr.Version() != protoVersion {
 			s.logger.Printf("[ERR] yamux: Invalid protocol version: %d", hdr.Version())
