@@ -304,9 +304,11 @@ func (s *Session) Ping() (time.Duration, error) {
 
 	// Wait for a response
 	start := time.Now()
+	timer := time.NewTimer(s.config.ConnectionWriteTimeout)
+	defer timer.Stop()
 	select {
 	case <-ch:
-	case <-time.After(s.config.ConnectionWriteTimeout):
+	case <-timer.C:
 		s.pingLock.Lock()
 		delete(s.pings, id) // Ignore it if a response comes later.
 		s.pingLock.Unlock()
@@ -316,7 +318,7 @@ func (s *Session) Ping() (time.Duration, error) {
 	}
 
 	// Compute the RTT
-	return time.Now().Sub(start), nil
+	return time.Since(start), nil
 }
 
 // startKeepalive starts the keepalive process.
@@ -504,6 +506,14 @@ func (s *Session) recvLoop() error {
 				s.logger.Printf("[ERR] yamux: Failed to read header: %v", err)
 			}
 			return err
+		}
+
+		// Reset the keepalive timer every time we receive data.
+		// There's no reason to keepalive if we're active. Worse, if the
+		// peer is busy sending us stuff, the pong might get stuck
+		// behind a bunch of data.
+		if s.keepaliveTimer != nil {
+			s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
 		}
 
 		// Verify the version
