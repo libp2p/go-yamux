@@ -8,8 +8,10 @@ go:
 
 env:
   global:
-    - GOTFLAGS="-race"
     - BUILD_DEPTYPE=gomod
+  matrix:
+    - GOTFLAGS="-race"
+    - GOTFLAGS="-count 5"
 
 
 # disable travis install
