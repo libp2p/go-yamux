@@ -48,13 +48,14 @@ func BenchmarkAccept(b *testing.B) {
 func BenchmarkSendRecv(b *testing.B) {
 	client, server := testClientServer()
 	defer client.Close()
-	defer server.Close()
 
 	sendBuf := make([]byte, 512)
 	recvBuf := make([]byte, 512)
 
 	doneCh := make(chan struct{})
 	go func() {
+		defer close(doneCh)
+		defer server.Close()
 		stream, err := server.AcceptStream()
 		if err != nil {
 			return
@@ -62,10 +63,10 @@ func BenchmarkSendRecv(b *testing.B) {
 		defer stream.Close()
 		for i := 0; i < b.N; i++ {
 			if _, err := io.ReadFull(stream, recvBuf); err != nil {
-				b.Fatalf("err: %v", err)
+				b.Errorf("err: %v", err)
+				return
 			}
 		}
-		close(doneCh)
 	}()
 
 	stream, err := client.Open()
@@ -95,6 +96,8 @@ func BenchmarkSendRecvLarge(b *testing.B) {
 	recvDone := make(chan struct{})
 
 	go func() {
+		defer close(recvDone)
+		defer server.Close()
 		stream, err := server.AcceptStream()
 		if err != nil {
 			return
@@ -103,11 +106,11 @@ func BenchmarkSendRecvLarge(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			for j := 0; j < sendSize/recvSize; j++ {
 				if _, err := io.ReadFull(stream, recvBuf); err != nil {
-					b.Fatalf("err: %v", err)
+					b.Errorf("err: %v", err)
+					return
 				}
 			}
 		}
-		close(recvDone)
 	}()
 
 	stream, err := client.Open()
