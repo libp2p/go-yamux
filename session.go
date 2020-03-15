@@ -92,11 +92,6 @@ type Session struct {
 	keepaliveActive bool
 }
 
-const (
-	stageInitial uint32 = iota
-	stageFinal
-)
-
 // newSession is used to construct a new session
 func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Session {
 	var reader io.Reader = conn
