@@ -87,14 +87,10 @@ type Session struct {
 
 	// keepaliveTimer is a periodic timer for keepalive messages. It's nil
 	// when keepalives are disabled.
-	keepaliveLock  sync.Mutex
-	keepaliveTimer *time.Timer
+	keepaliveLock   sync.Mutex
+	keepaliveTimer  *time.Timer
+	keepaliveActive bool
 }
-
-const (
-	stageInitial uint32 = iota
-	stageFinal
-)
 
 // newSession is used to construct a new session
 func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Session {
@@ -327,23 +323,27 @@ func (s *Session) startKeepalive() {
 	defer s.keepaliveLock.Unlock()
 	s.keepaliveTimer = time.AfterFunc(s.config.KeepAliveInterval, func() {
 		s.keepaliveLock.Lock()
-
-		if s.keepaliveTimer == nil {
+		if s.keepaliveTimer == nil || s.keepaliveActive {
+			// keepalives have been stopped or a keepalive is active.
 			s.keepaliveLock.Unlock()
-			// keepalives have been stopped.
 			return
 		}
+		s.keepaliveActive = true
+		s.keepaliveLock.Unlock()
+
 		_, err := s.Ping()
+
+		s.keepaliveLock.Lock()
+		s.keepaliveActive = false
+		if s.keepaliveTimer != nil {
+			s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
+		}
+		s.keepaliveLock.Unlock()
+
 		if err != nil {
-			// Make sure to unlock before exiting so we don't
-			// deadlock trying to shutdown keepalives.
-			s.keepaliveLock.Unlock()
 			s.logger.Printf("[ERR] yamux: keepalive failed: %v", err)
 			s.exitErr(ErrKeepAliveTimeout)
-			return
 		}
-		s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
-		s.keepaliveLock.Unlock()
 	})
 }
 
@@ -353,7 +353,24 @@ func (s *Session) stopKeepalive() {
 	defer s.keepaliveLock.Unlock()
 	if s.keepaliveTimer != nil {
 		s.keepaliveTimer.Stop()
+		s.keepaliveTimer = nil
 	}
+}
+
+func (s *Session) extendKeepalive() {
+	s.keepaliveLock.Lock()
+	if s.keepaliveTimer != nil && !s.keepaliveActive {
+		// Don't stop the timer and drain the channel. This is an
+		// AfterFunc, not a normal timer, and any attempts to drain the
+		// channel will block forever.
+		//
+		// Go will stop the timer for us internally anyways. The docs
+		// say one must stop the timer before calling reset but that's
+		// to ensure that the timer doesn't end up firing immediately
+		// after calling Reset.
+		s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
+	}
+	s.keepaliveLock.Unlock()
 }
 
 // send sends the header and body.
@@ -512,9 +529,7 @@ func (s *Session) recvLoop() error {
 		// There's no reason to keepalive if we're active. Worse, if the
 		// peer is busy sending us stuff, the pong might get stuck
 		// behind a bunch of data.
-		if s.keepaliveTimer != nil {
-			s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
-		}
+		s.extendKeepalive()
 
 		// Verify the version
 		if hdr.Version() != protoVersion {
