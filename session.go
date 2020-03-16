@@ -360,6 +360,14 @@ func (s *Session) stopKeepalive() {
 func (s *Session) extendKeepalive() {
 	s.keepaliveLock.Lock()
 	if s.keepaliveTimer != nil && !s.keepaliveActive {
+		// Don't stop the timer and drain the channel. This is an
+		// AfterFunc, not a normal timer, and any attempts to drain the
+		// channel will block forever.
+		//
+		// Go will stop the timer for us internally anyways. The docs
+		// say one must stop the timer before calling reset but that's
+		// to ensure that the timer doesn't end up firing immediately
+		// after calling Reset.
 		s.keepaliveTimer.Reset(s.config.KeepAliveInterval)
 	}
 	s.keepaliveLock.Unlock()
