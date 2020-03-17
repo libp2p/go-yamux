@@ -47,6 +47,10 @@ type Config struct {
 	// MaxMessageSize is the maximum size of a message that we'll send on a
 	// stream. This ensures that a single stream doesn't hog a connection.
 	MaxMessageSize uint32
+
+	// SendQueueSize is the maximum number of messages we'll keep in the local
+	// send queue before applying back pressure to writers.
+	SendQueueSize uint32
 }
 
 // DefaultConfig is used to return a default configuration
@@ -61,6 +65,7 @@ func DefaultConfig() *Config {
 		ReadBufSize:            4096,
 		MaxMessageSize:         64 * 1024, // Means 64KiB/10s = 52kbps minimum speed.
 		WriteCoalesceDelay:     100 * time.Microsecond,
+		SendQueueSize:          64,
 	}
 }
 

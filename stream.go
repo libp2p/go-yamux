@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/libp2p/go-buffer-pool"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 type streamState int
@@ -20,6 +20,7 @@ const (
 	streamRemoteClose
 	streamClosed
 	streamReset
+	streamWriteTimeout
 )
 
 // Stream is used to represent a logical stream
@@ -41,6 +42,7 @@ type Stream struct {
 
 	recvNotifyCh chan struct{}
 	sendNotifyCh chan struct{}
+	sendCh       chan []byte
 
 	readDeadline, writeDeadline pipeDeadline
 }
@@ -164,12 +166,13 @@ START:
 	// Determine the flags if any
 	flags = s.sendFlags()
 
-	// Send up to min(message, window
+	// Send up to min(message, window)
 	max = min(window, s.session.config.MaxMessageSize-headerSize, uint32(len(b)))
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
-	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait()); err != nil {
+	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait(), s); err != nil {
+		// Indicate queued message.
 		return 0, err
 	}
 
@@ -228,7 +231,7 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Send the header
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
-	if err := s.session.sendMsg(hdr, nil, nil); err != nil {
+	if err := s.session.sendMsg(hdr, nil, nil, nil); err != nil {
 		return err
 	}
 	return nil
@@ -239,13 +242,13 @@ func (s *Stream) sendClose() error {
 	flags := s.sendFlags()
 	flags |= flagFIN
 	hdr := encode(typeWindowUpdate, flags, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil)
+	return s.session.sendMsg(hdr, nil, nil, s)
 }
 
 // sendReset is used to send a RST
 func (s *Stream) sendReset() error {
 	hdr := encode(typeWindowUpdate, flagRST, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil)
+	return s.session.sendMsg(hdr, nil, nil, s)
 }
 
 // Reset resets the stream (forcibly closes the stream)
@@ -308,7 +311,7 @@ SEND_CLOSE:
 }
 
 // forceClose is used for when the session is exiting
-func (s *Stream) forceClose() {
+func (s *Stream) forceClose(err error) {
 	s.stateLock.Lock()
 	switch s.state {
 	case streamClosed:

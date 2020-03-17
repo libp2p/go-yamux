@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/libp2p/go-buffer-pool"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 // Session is used to wrap a reliable ordered connection and to
@@ -67,6 +67,9 @@ type Session struct {
 	// sendCh is used to send messages
 	sendCh chan []byte
 
+	// sendCtrlCh is used to send control messages (skipping the normal send queue)
+	sendCtrlCh chan []byte
+
 	// recvDoneCh is closed when recv() exits to avoid a race
 	// between stream registration and stream shutdown
 	recvDoneCh chan struct{}
@@ -109,7 +112,8 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 		inflight:   make(map[uint32]struct{}),
 		synCh:      make(chan struct{}, config.AcceptBacklog),
 		acceptCh:   make(chan *Stream, config.AcceptBacklog),
-		sendCh:     make(chan []byte, 64),
+		sendCh:     make(chan []byte, config.SendQueueSize),
+		sendCtrlCh: make(chan []byte, 16),
 		recvDoneCh: make(chan struct{}),
 		sendDoneCh: make(chan struct{}),
 		shutdownCh: make(chan struct{}),
@@ -251,7 +255,7 @@ func (s *Session) Close() error {
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
 	for _, stream := range s.streams {
-		stream.forceClose()
+		stream.forceClose(s.shutdownErr)
 	}
 	return nil
 }
@@ -270,7 +274,7 @@ func (s *Session) exitErr(err error) {
 // GoAway can be used to prevent accepting further
 // connections. It does not close the underlying conn.
 func (s *Session) GoAway() error {
-	return s.sendMsg(s.goAway(goAwayNormal), nil, nil)
+	return s.sendMsg(s.goAway(goAwayNormal), nil, nil, nil)
 }
 
 // goAway is used to send a goAway message
@@ -294,7 +298,7 @@ func (s *Session) Ping() (time.Duration, error) {
 
 	// Send the ping request
 	hdr := encode(typePing, flagSYN, 0, id)
-	if err := s.sendMsg(hdr, nil, nil); err != nil {
+	if err := s.sendMsg(hdr, nil, nil, nil); err != nil {
 		return 0, err
 	}
 
@@ -374,7 +378,7 @@ func (s *Session) extendKeepalive() {
 }
 
 // send sends the header and body.
-func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) error {
+func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}, stream *Stream) error {
 	select {
 	case <-s.shutdownCh:
 		return s.shutdownErr
@@ -386,15 +390,29 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 	copy(buf[:headerSize], hdr[:])
 	copy(buf[headerSize:], body)
 
-	select {
-	case <-s.shutdownCh:
-		pool.Put(buf)
-		return s.shutdownErr
-	case s.sendCh <- buf:
-		return nil
-	case <-deadline:
-		pool.Put(buf)
-		return ErrTimeout
+	if stream != nil {
+		select {
+		case <-s.shutdownCh:
+			pool.Put(buf)
+			return s.shutdownErr
+		case s.sendCh <- buf:
+			return nil
+		case <-deadline:
+			pool.Put(buf)
+			return ErrTimeout
+		}
+	} else {
+		select {
+		case <-s.shutdownCh:
+			pool.Put(buf)
+			return s.shutdownErr
+		case s.sendCtrlCh <- buf:
+			return nil
+		case <-deadline:
+			pool.Put(buf)
+			return ErrTimeout
+		}
+
 	}
 }
 
@@ -446,37 +464,57 @@ func (s *Session) sendLoop() error {
 		default:
 		}
 
-		// Flushes at least once every 100 microseconds unless we're
-		// constantly writing.
 		var buf []byte
+		// Preferentially use control channel.
 		select {
-		case buf = <-s.sendCh:
+		case buf = <-s.sendCtrlCh:
+			goto WITHDATA
 		case <-s.shutdownCh:
 			return nil
 		default:
-			select {
-			case buf = <-s.sendCh:
-			case <-s.shutdownCh:
-				return nil
-			case <-writeTimeoutCh:
-				if err := writer.Flush(); err != nil {
-					if os.IsTimeout(err) {
-						err = ErrConnectionWriteTimeout
-					}
-					return err
-				}
-
-				select {
-				case buf = <-s.sendCh:
-				case <-s.shutdownCh:
-					return nil
-				}
-
-				if writeTimeout != nil {
-					writeTimeout.Reset(s.config.WriteCoalesceDelay)
-				}
-			}
 		}
+
+		// Flushes at least once every 100 microseconds unless we're
+		// constantly writing.
+		select {
+		case buf = <-s.sendCh:
+			goto WITHDATA
+		case buf = <-s.sendCtrlCh:
+			goto WITHDATA
+		case <-s.shutdownCh:
+			return nil
+		default:
+		}
+
+		select {
+		case buf = <-s.sendCh:
+			goto WITHDATA
+		case buf = <-s.sendCtrlCh:
+			goto WITHDATA
+		case <-s.shutdownCh:
+			return nil
+		case <-writeTimeoutCh:
+		}
+
+		if err := writer.Flush(); err != nil {
+			if os.IsTimeout(err) {
+				err = ErrConnectionWriteTimeout
+			}
+			return err
+		}
+
+		select {
+		case buf = <-s.sendCh:
+		case buf = <-s.sendCtrlCh:
+		case <-s.shutdownCh:
+			return nil
+		}
+
+		if writeTimeout != nil {
+			writeTimeout.Reset(s.config.WriteCoalesceDelay)
+		}
+
+	WITHDATA:
 
 		if err := extendWriteDeadline(); err != nil {
 			pool.Put(buf)
@@ -582,7 +620,7 @@ func (s *Session) handleStreamMessage(hdr header) error {
 	// Check if this is a window update
 	if hdr.MsgType() == typeWindowUpdate {
 		if err := stream.incrSendWindow(hdr, flags); err != nil {
-			if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
+			if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil, nil); sendErr != nil {
 				s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
 			}
 			return err
@@ -592,7 +630,7 @@ func (s *Session) handleStreamMessage(hdr header) error {
 
 	// Read the new data
 	if err := stream.readData(hdr, flags, s.reader); err != nil {
-		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
+		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil, nil); sendErr != nil {
 			s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
 		}
 		return err
@@ -610,7 +648,7 @@ func (s *Session) handlePing(hdr header) error {
 	if flags&flagSYN == flagSYN {
 		go func() {
 			hdr := encode(typePing, flagACK, 0, pingID)
-			if err := s.sendMsg(hdr, nil, nil); err != nil {
+			if err := s.sendMsg(hdr, nil, nil, nil); err != nil {
 				s.logger.Printf("[WARN] yamux: failed to send ping reply: %v", err)
 			}
 		}()
@@ -656,7 +694,7 @@ func (s *Session) incomingStream(id uint32) error {
 	// Reject immediately if we are doing a go away
 	if atomic.LoadInt32(&s.localGoAway) == 1 {
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
-		return s.sendMsg(hdr, nil, nil)
+		return s.sendMsg(hdr, nil, nil, nil)
 	}
 
 	// Allocate a new stream
@@ -668,7 +706,7 @@ func (s *Session) incomingStream(id uint32) error {
 	// Check if stream already exists
 	if _, ok := s.streams[id]; ok {
 		s.logger.Printf("[ERR] yamux: duplicate stream declared")
-		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
+		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil, nil); sendErr != nil {
 			s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
 		}
 		return ErrDuplicateStream
@@ -686,7 +724,7 @@ func (s *Session) incomingStream(id uint32) error {
 		s.logger.Printf("[WARN] yamux: backlog exceeded, forcing connection reset")
 		delete(s.streams, id)
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
-		return s.sendMsg(hdr, nil, nil)
+		return s.sendMsg(hdr, nil, nil, nil)
 	}
 }
 
