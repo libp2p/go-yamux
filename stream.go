@@ -171,7 +171,7 @@ START:
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
-	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait(), s); err != nil {
+	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait(), false); err != nil {
 		// Indicate queued message.
 		return 0, err
 	}
@@ -231,7 +231,7 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Send the header
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
-	if err := s.session.sendMsg(hdr, nil, nil, nil); err != nil {
+	if err := s.session.sendMsg(hdr, nil, nil, true); err != nil {
 		return err
 	}
 	return nil
@@ -242,13 +242,13 @@ func (s *Stream) sendClose() error {
 	flags := s.sendFlags()
 	flags |= flagFIN
 	hdr := encode(typeWindowUpdate, flags, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil, s)
+	return s.session.sendMsg(hdr, nil, nil, false)
 }
 
 // sendReset is used to send a RST
 func (s *Stream) sendReset() error {
 	hdr := encode(typeWindowUpdate, flagRST, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil, s)
+	return s.session.sendMsg(hdr, nil, nil, false)
 }
 
 // Reset resets the stream (forcibly closes the stream)
@@ -311,7 +311,7 @@ SEND_CLOSE:
 }
 
 // forceClose is used for when the session is exiting
-func (s *Stream) forceClose(err error) {
+func (s *Stream) forceClose() {
 	s.stateLock.Lock()
 	switch s.state {
 	case streamClosed:
