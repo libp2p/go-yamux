@@ -12,7 +12,13 @@ import (
 )
 
 func TestSession_PingOfDeath(t *testing.T) {
-	client, server := testClientServerConfig(testConfNoKeepAlive())
+	conf := testConfNoKeepAlive()
+	// This test is slow and can easily time out on writes on CI.
+	//
+	// In the future, we might want to prioritize ping-replies over even
+	// other control messages, but that seems like overkill for now.
+	conf.ConnectionWriteTimeout = 1 * time.Second
+	client, server := testClientServerConfig(conf)
 	defer client.Close()
 	defer server.Close()
 
