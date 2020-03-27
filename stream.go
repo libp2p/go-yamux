@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pool "github.com/libp2p/go-buffer-pool"
+	"github.com/libp2p/go-buffer-pool"
 )
 
 type streamState int
@@ -20,7 +20,6 @@ const (
 	streamRemoteClose
 	streamClosed
 	streamReset
-	streamWriteTimeout
 )
 
 // Stream is used to represent a logical stream
@@ -42,7 +41,6 @@ type Stream struct {
 
 	recvNotifyCh chan struct{}
 	sendNotifyCh chan struct{}
-	sendCh       chan []byte
 
 	readDeadline, writeDeadline pipeDeadline
 }
@@ -166,13 +164,12 @@ START:
 	// Determine the flags if any
 	flags = s.sendFlags()
 
-	// Send up to min(message, window)
+	// Send up to min(message, window
 	max = min(window, s.session.config.MaxMessageSize-headerSize, uint32(len(b)))
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
-	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait(), false); err != nil {
-		// Indicate queued message.
+	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait()); err != nil {
 		return 0, err
 	}
 
@@ -231,7 +228,7 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Send the header
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
-	if err := s.session.sendMsg(hdr, nil, nil, true); err != nil {
+	if err := s.session.sendMsg(hdr, nil, nil); err != nil {
 		return err
 	}
 	return nil
@@ -242,13 +239,13 @@ func (s *Stream) sendClose() error {
 	flags := s.sendFlags()
 	flags |= flagFIN
 	hdr := encode(typeWindowUpdate, flags, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil, false)
+	return s.session.sendMsg(hdr, nil, nil)
 }
 
 // sendReset is used to send a RST
 func (s *Stream) sendReset() error {
 	hdr := encode(typeWindowUpdate, flagRST, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil, false)
+	return s.session.sendMsg(hdr, nil, nil)
 }
 
 // Reset resets the stream (forcibly closes the stream)

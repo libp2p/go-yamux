@@ -1197,7 +1197,7 @@ func TestSession_sendMsg_Timeout(t *testing.T) {
 
 	hdr := encode(typePing, flagACK, 0, 0)
 	for {
-		err := client.sendMsg(hdr, nil, nil, true)
+		err := client.sendMsg(hdr, nil, nil)
 		if err == nil {
 			continue
 		} else if err == ErrConnectionWriteTimeout {
