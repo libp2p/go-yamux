@@ -430,11 +430,11 @@ func (s *Session) sendLoop() error {
 		writeTimeout = time.NewTimer(s.config.WriteCoalesceDelay)
 		defer writeTimeout.Stop()
 
+		if !writeTimeout.Stop() {
+			<-writeTimeout.C
+		}
+
 		writeTimeoutCh = writeTimeout.C
-	} else {
-		ch := make(chan time.Time)
-		close(ch)
-		writeTimeoutCh = ch
 	}
 
 	for {
@@ -454,27 +454,44 @@ func (s *Session) sendLoop() error {
 		case <-s.shutdownCh:
 			return nil
 		default:
+			if writeTimeout == nil {
+				// if we have no write timeout, always flush.
+				if err := writer.Flush(); err != nil {
+					return fixError(err)
+				}
+			} else {
+				buffered := writer.Buffered()
+				if buffered > eagerFlushSize {
+					// otherwise, if we've buffered over the minimum, flush.
+					if err := writer.Flush(); err != nil {
+						return fixError(err)
+					}
+				} else if buffered > 0 {
+					// else, if we have _any_ buffer, set
+					// the write timeout.
+					writeTimeout.Reset(s.config.WriteCoalesceDelay)
+				}
+			}
 			select {
 			case buf = <-s.sendCh:
+				// if we have a write timeout and have data
+				// buffered, we've set a timeout.
+				//
+				// stop it.
+				if writeTimeout != nil && writer.Buffered() > 0 {
+					if !writeTimeout.Stop() {
+						<-writeTimeoutCh
+					}
+				}
 			case <-s.shutdownCh:
 				return nil
 			case <-writeTimeoutCh:
+				// Note: we'll never hit this code when the
+				// coalesce delay is 0.
 				if err := writer.Flush(); err != nil {
-					if os.IsTimeout(err) {
-						err = ErrConnectionWriteTimeout
-					}
-					return err
+					return fixError(err)
 				}
-
-				select {
-				case buf = <-s.sendCh:
-				case <-s.shutdownCh:
-					return nil
-				}
-
-				if writeTimeout != nil {
-					writeTimeout.Reset(s.config.WriteCoalesceDelay)
-				}
+				continue
 			}
 		}
 
@@ -487,12 +504,16 @@ func (s *Session) sendLoop() error {
 		pool.Put(buf)
 
 		if err != nil {
-			if os.IsTimeout(err) {
-				err = ErrConnectionWriteTimeout
-			}
-			return err
+			return fixError(err)
 		}
 	}
+}
+
+func fixError(err error) error {
+	if os.IsTimeout(err) {
+		err = ErrConnectionWriteTimeout
+	}
+	return err
 }
 
 // recv is a long running goroutine that accepts new data

@@ -71,6 +71,12 @@ var (
 )
 
 const (
+	// eagerFlushSize is the amount of data we'll eagerly flush if we would
+	// otherwise sleep.
+	eagerFlushSize = 512
+)
+
+const (
 	// protoVersion is the only version we support
 	protoVersion uint8 = 0
 )
