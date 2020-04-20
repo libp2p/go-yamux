@@ -413,14 +413,15 @@ func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
 	s.recvLock.Lock()
 
 	if length > s.recvWindow {
+		s.recvLock.Unlock()
 		s.session.logger.Printf("[ERR] yamux: receive window exceeded (stream: %d, remain: %d, recv: %d)", s.id, s.recvWindow, length)
 		return ErrRecvWindowExceeded
 	}
 
 	s.recvBuf.Grow(int(length))
 	if _, err := io.Copy(&s.recvBuf, conn); err != nil {
-		s.session.logger.Printf("[ERR] yamux: Failed to read stream data: %v", err)
 		s.recvLock.Unlock()
+		s.session.logger.Printf("[ERR] yamux: Failed to read stream data: %v", err)
 		return err
 	}
 

@@ -1208,6 +1208,34 @@ func TestSession_sendMsg_Timeout(t *testing.T) {
 	}
 }
 
+func TestWindowOverflow(t *testing.T) {
+	// Ensures:
+	//
+	// 1. We don't accept a message that's too big.
+	// 2. We unlock after resetting the stream.
+	for i := uint32(1); i < 100; i += 2 {
+		func() {
+			client, server := testClientServerConfig(testConfNoKeepAlive())
+			defer client.Close()
+			defer server.Close()
+
+			hdr1 := encode(typeData, flagSYN, i, 0)
+			_ = client.sendMsg(hdr1, nil, nil)
+			s, err := server.AcceptStream()
+			if err != nil {
+				t.Fatal(err)
+			}
+			msg := make([]byte, client.config.MaxStreamWindowSize*2)
+			hdr2 := encode(typeData, 0, i, uint32(len(msg)))
+			_ = client.sendMsg(hdr2, msg, nil)
+			_, err = ioutil.ReadAll(s)
+			if err == nil {
+				t.Fatal("expected to read no data")
+			}
+		}()
+	}
+}
+
 func TestSession_ConnectionWriteTimeout(t *testing.T) {
 	client, server := testClientServerConfig(testConfNoKeepAlive())
 	defer client.Close()
