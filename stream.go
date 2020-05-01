@@ -81,9 +81,7 @@ START:
 	case streamRemoteClose:
 		fallthrough
 	case streamClosed:
-		s.recvLock.Lock()
 		empty := s.recvBuf.Len() == 0
-		s.recvLock.Unlock()
 		if empty {
 			return 0, io.EOF
 		}
@@ -210,18 +208,12 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Determine the delta update
 	max := s.session.config.MaxStreamWindowSize
-	s.recvLock.Lock()
-	delta := (max - uint32(s.recvBuf.Len())) - s.recvBuf.Cap()
-
-	// Check if we can omit the update
-	if delta < (max/2) && flags == 0 {
-		s.recvLock.Unlock()
-		return nil
-	}
 
 	// Update our window
-	s.recvBuf.Grow(delta)
-	s.recvLock.Unlock()
+	needed, delta := s.recvBuf.GrowTo(uint64(max), flags != 0)
+	if !needed {
+		return nil
+	}
 
 	// Send the header
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
@@ -407,7 +399,7 @@ func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
 	conn = &io.LimitedReader{R: conn, N: int64(length)}
 
 	// Validate it's okay to copy
-	if length > uint32(s.recvBuf.Cap()) {
+	if !s.recvBuf.TryReserve(length) {
 		s.session.logger.Printf("[ERR] yamux: receive window exceeded (stream: %d, remain: %d, recv: %d)", s.id, s.recvBuf.Cap(), length)
 		return ErrRecvWindowExceeded
 	}

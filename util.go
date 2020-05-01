@@ -39,28 +39,57 @@ func min(values ...uint32) uint32 {
 }
 
 type segmentedBuffer struct {
-	cap uint32
-	len int32
-	bm  sync.Mutex
-	b   [][]byte
+	cap     uint64
+	pending uint64
+	len     uint64
+	bm      sync.Mutex
+	b       [][]byte
 }
 
+// NewSegmentedBuffer allocates a ring buffer.
 func NewSegmentedBuffer(initialCapacity uint32) segmentedBuffer {
-	s := segmentedBuffer{b: make([][]byte, 0)}
-	atomic.AddUint32(&s.cap, initialCapacity)
-	return s
+	return segmentedBuffer{cap: uint64(initialCapacity), b: make([][]byte, 0)}
 }
 
 func (s *segmentedBuffer) Len() int {
-	return int(atomic.LoadInt32(&s.len))
+	return int(atomic.LoadUint64(&s.len))
 }
 
-func (s *segmentedBuffer) Cap() uint32 {
-	return atomic.LoadUint32(&s.cap)
+func (s *segmentedBuffer) Cap() uint64 {
+	return atomic.LoadUint64(&s.cap)
 }
 
-func (s *segmentedBuffer) Grow(amt uint32) {
-	atomic.AddUint32(&s.cap, amt)
+// If the space to write into + current buffer size has grown to half of the window size,
+// grow up to that max size, and indicate how much additional space was reserved.
+func (s *segmentedBuffer) GrowTo(max uint64, force bool) (bool, uint32) {
+	s.bm.Lock()
+	defer s.bm.Unlock()
+
+	currentWindow := atomic.LoadUint64(&s.len) + atomic.LoadUint64(&s.cap) + s.pending
+	if currentWindow > max {
+		// Not an error, but rather an in-flight reservation hasn't hit.
+		return false, 0
+	}
+	delta := max - currentWindow
+
+	if delta < (max/2) && !force {
+		return false, 0
+	}
+
+	atomic.AddUint64(&s.cap, delta)
+	return true, uint32(delta)
+}
+
+func (s *segmentedBuffer) TryReserve(space uint32) bool {
+	// It is noticable that the check-and-set of pending is not atomic,
+	// Due to this, accesses to pending are protected by bm.
+	s.bm.Lock()
+	defer s.bm.Unlock()
+	if atomic.LoadUint64(&s.cap) < s.pending+uint64(space) {
+		return false
+	}
+	s.pending = s.pending + uint64(space)
+	return true
 }
 
 func (s *segmentedBuffer) Read(b []byte) (int, error) {
@@ -77,7 +106,9 @@ func (s *segmentedBuffer) Read(b []byte) (int, error) {
 	} else {
 		s.b[0] = s.b[0][n:]
 	}
-	atomic.AddInt32(&s.len, -1*int32(n))
+	if n > 0 {
+		atomic.AddUint64(&s.len, ^uint64(n-1))
+	}
 	return n, nil
 }
 
@@ -95,10 +126,13 @@ func (s *segmentedBuffer) Append(input io.Reader, length int) error {
 		default:
 			s.bm.Lock()
 			defer s.bm.Unlock()
-			atomic.AddInt32(&s.len, int32(n))
-			// cap -= n
-			atomic.AddUint32(&s.cap, ^uint32(n-1))
-			s.b = append(s.b, dst[0:n])
+			if n > 0 {
+				atomic.AddUint64(&s.len, uint64(n))
+				// cap -= n
+				atomic.AddUint64(&s.cap, ^uint64(n-1))
+				s.pending = s.pending - uint64(length)
+				s.b = append(s.b, dst[0:n])
+			}
 			return err
 		}
 	}
