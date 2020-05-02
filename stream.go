@@ -210,7 +210,7 @@ func (s *Stream) sendWindowUpdate() error {
 	max := s.session.config.MaxStreamWindowSize
 
 	// Update our window
-	needed, delta := s.recvBuf.GrowTo(uint64(max), flags != 0)
+	needed, delta := s.recvBuf.GrowTo(max, flags != 0)
 	if !needed {
 		return nil
 	}
