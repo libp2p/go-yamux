@@ -395,9 +395,6 @@ func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
 		return nil
 	}
 
-	// Wrap in a limited reader
-	conn = &io.LimitedReader{R: conn, N: int64(length)}
-
 	// Validate it's okay to copy
 	if !s.recvBuf.TryReserve(length) {
 		s.session.logger.Printf("[ERR] yamux: receive window exceeded (stream: %d, remain: %d, recv: %d)", s.id, s.recvBuf.Cap(), length)

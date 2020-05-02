@@ -120,29 +120,37 @@ func (s *segmentedBuffer) Read(b []byte) (int, error) {
 func (s *segmentedBuffer) Append(input io.Reader, length int) error {
 	dst := pool.Get(length)
 	n := 0
+	read := 0
+	var err error
+LOOP:
 	for {
-		read, err := input.Read(dst[n:])
+		read, err = input.Read(dst[n:])
 		n += read
 		switch err {
 		case nil:
+			if n == length {
+				break LOOP
+			}
 		case io.EOF:
 			if n == length {
 				err = nil
 			} else {
 				err = ErrStreamReset
 			}
-			fallthrough
+			break LOOP
 		default:
-			s.bm.Lock()
-			defer s.bm.Unlock()
-			if n > 0 {
-				atomic.AddUint64(&s.len, uint64(n))
-				// cap -= n
-				atomic.AddUint64(&s.cap, ^uint64(n-1))
-				s.pending = s.pending - uint64(length)
-				s.b = append(s.b, dst[0:n])
-			}
-			return err
+			break LOOP
 		}
 	}
+
+	s.bm.Lock()
+	defer s.bm.Unlock()
+	if n > 0 {
+		atomic.AddUint64(&s.len, uint64(n))
+		// cap -= n
+		atomic.AddUint64(&s.cap, ^uint64(n-1))
+		s.pending = s.pending - uint64(length)
+		s.b = append(s.b, dst[0:n])
+	}
+	return err
 }
