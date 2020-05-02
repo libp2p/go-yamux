@@ -122,24 +122,15 @@ func (s *segmentedBuffer) Append(input io.Reader, length int) error {
 	n := 0
 	read := 0
 	var err error
-LOOP:
-	for {
+	for n < length && err == nil {
 		read, err = input.Read(dst[n:])
 		n += read
-		switch err {
-		case nil:
-			if n == length {
-				break LOOP
-			}
-		case io.EOF:
-			if n == length {
-				err = nil
-			} else {
-				err = ErrStreamReset
-			}
-			break LOOP
-		default:
-			break LOOP
+	}
+	if err == io.EOF {
+		if length == n {
+			err = nil
+		} else {
+			err = ErrStreamReset
 		}
 	}
 
