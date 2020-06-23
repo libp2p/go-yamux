@@ -690,7 +690,6 @@ func (s *Session) incomingStream(id uint32) error {
 		// Backlog exceeded! RST the stream
 		s.logger.Printf("[WARN] yamux: backlog exceeded, forcing connection reset")
 		delete(s.streams, id)
-		delete(s.inflight, id)
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
 		return s.sendMsg(hdr, nil, nil)
 	}
@@ -707,9 +706,9 @@ func (s *Session) closeStream(id uint32) {
 		default:
 			s.logger.Printf("[ERR] yamux: SYN tracking out of sync")
 		}
+		delete(s.inflight, id)
 	}
 	delete(s.streams, id)
-	delete(s.inflight, id)
 	s.streamLock.Unlock()
 }
 
