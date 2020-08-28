@@ -151,7 +151,7 @@ func (s *segmentedBuffer) Append(input io.Reader, length int) error {
 		if length == n {
 			err = nil
 		} else {
-			err = ErrStreamReset
+			err = io.ErrUnexpectedEOF
 		}
 	}
 
