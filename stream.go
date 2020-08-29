@@ -52,7 +52,7 @@ func newStream(session *Session, id uint32, state streamState) *Stream {
 		sendWindow:    initialStreamWindow,
 		readDeadline:  makePipeDeadline(),
 		writeDeadline: makePipeDeadline(),
-		recvBuf:       NewSegmentedBuffer(initialStreamWindow),
+		recvBuf:       newSegmentedBuffer(initialStreamWindow),
 		recvNotifyCh:  make(chan struct{}, 1),
 		sendNotifyCh:  make(chan struct{}, 1),
 	}
