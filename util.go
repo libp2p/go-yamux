@@ -42,14 +42,14 @@ func min(values ...uint32) uint32 {
 //      |     data      | empty space       |
 //       < window (10)                     >
 //       < len (5)     > < cap (5)         >
-//                       < pending (4) ->
+//                       < pending (4)    >
 //
 // As data is read, the buffer gets updated like so:
 //
 //         |     data   | empty space       |
 //          < window (8)                   >
 //          < len (3)  > < cap (5)         >
-//                       < pending (4) ->
+//                       < pending (4)    >
 //
 // It can then grow as follows (given a "max" of 10):
 //
@@ -57,7 +57,15 @@ func min(values ...uint32) uint32 {
 //         |     data   | empty space          |
 //          < window (10)                     >
 //          < len (3)  > < cap (7)            >
-//                       < pending (4) ->
+//                       < pending (4)    >
+//
+// Data can then be written into the pending space, expanding len, and shrinking
+// cap and pending:
+//
+//         |     data       | empty space      |
+//          < window (10)                     >
+//          < len (5)      > < cap (5)        >
+//                           < pending (2)>
 //
 type segmentedBuffer struct {
 	cap     uint32
@@ -81,6 +89,9 @@ func (s *segmentedBuffer) Len() int {
 }
 
 // Cap is the remaining capacity in the receive buffer.
+//
+// Note: this is _not_ the same as go's 'cap' function. The total size of the
+// buffer is len+cap.
 func (s *segmentedBuffer) Cap() uint32 {
 	s.bm.Lock()
 	cap := s.cap
