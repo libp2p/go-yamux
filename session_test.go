@@ -407,6 +407,7 @@ func TestSendData_Small(t *testing.T) {
 			t.Errorf("err: %v", err)
 			return
 		}
+		defer stream.Close()
 
 		if server.NumStreams() != 1 {
 			t.Errorf("bad")
@@ -430,7 +431,7 @@ func TestSendData_Small(t *testing.T) {
 			}
 		}
 
-		if err := stream.Close(); err != nil {
+		if err := stream.CloseWrite(); err != nil {
 			t.Errorf("err: %v", err)
 			return
 		}
@@ -442,11 +443,12 @@ func TestSendData_Small(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		stream, err := client.Open()
+		stream, err := client.OpenStream()
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
 		}
+		defer stream.Close()
 
 		if client.NumStreams() != 1 {
 			t.Errorf("bad")
@@ -465,7 +467,7 @@ func TestSendData_Small(t *testing.T) {
 			}
 		}
 
-		if err := stream.Close(); err != nil {
+		if err := stream.CloseWrite(); err != nil {
 			t.Errorf("err: %v", err)
 			return
 		}
@@ -785,12 +787,12 @@ func TestManyStreams_PingPong(t *testing.T) {
 	wg.Wait()
 }
 
-func TestHalfClose(t *testing.T) {
+func TestCloseRead(t *testing.T) {
 	client, server := testClientServer()
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.Open()
+	stream, err := client.OpenStream()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -798,15 +800,41 @@ func TestHalfClose(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	stream2, err := server.Accept()
+	stream2, err := server.AcceptStream()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	stream2.Close() // Half close
+	stream2.CloseRead()
 
 	buf := make([]byte, 4)
 	n, err := stream2.Read(buf)
+	if n != 0 || err == nil {
+		t.Fatalf("read after close: %d %s", n, err)
+	}
+}
+
+func TestHalfClose(t *testing.T) {
+	client, server := testClientServer()
+	defer client.Close()
+	defer server.Close()
+
+	stream, err := client.OpenStream()
 	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if _, err = stream.Write([]byte("a")); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	stream2, err := server.AcceptStream()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	stream2.CloseWrite() // Half close
+
+	buf := make([]byte, 4)
+	n, err := io.ReadAtLeast(stream2, buf, 1)
+	if err != nil && err != io.EOF {
 		t.Fatalf("err: %v", err)
 	}
 	if n != 1 {
@@ -817,11 +845,17 @@ func TestHalfClose(t *testing.T) {
 	if _, err = stream.Write([]byte("bcd")); err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	stream.Close()
+	stream.CloseWrite()
+
+	// write after close
+	n, err = stream.Write([]byte("foobar"))
+	if n != 0 || err == nil {
+		t.Fatalf("wrote after close: %d %s", n, err)
+	}
 
 	// Read after close
-	n, err = stream2.Read(buf)
-	if err != nil {
+	n, err = io.ReadAtLeast(stream2, buf, 3)
+	if err != nil && err != io.EOF {
 		t.Fatalf("err: %v", err)
 	}
 	if n != 3 {
@@ -1131,7 +1165,6 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 			t.Errorf("err: %v", err)
 			return
 		}
-		defer wr.Close()
 
 		sendWindow := atomic.LoadUint32(&wr.sendWindow)
 		if sendWindow != client.config.MaxStreamWindowSize {
@@ -1352,8 +1385,9 @@ func TestStreamHalfClose2(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	defer stream.Close()
 
-	stream.Close()
+	stream.CloseWrite()
 	wait <- struct{}{}
 
 	buf, err := ioutil.ReadAll(stream)
