@@ -1,6 +1,7 @@
 package yamux
 
 import (
+	"context"
 	"io"
 	"testing"
 )
@@ -37,7 +38,7 @@ func BenchmarkAccept(b *testing.B) {
 	}()
 
 	for i := 0; i < b.N; i++ {
-		stream, err := client.Open()
+		stream, err := client.Open(context.Background())
 		if err != nil {
 			b.Fatalf("err: %v", err)
 		}
@@ -69,7 +70,7 @@ func BenchmarkSendRecv(b *testing.B) {
 		}
 	}()
 
-	stream, err := client.Open()
+	stream, err := client.Open(context.Background())
 	if err != nil {
 		b.Fatalf("err: %v", err)
 	}
@@ -113,7 +114,7 @@ func BenchmarkSendRecvLarge(b *testing.B) {
 		}
 	}()
 
-	stream, err := client.Open()
+	stream, err := client.Open(context.Background())
 	if err != nil {
 		b.Fatalf("err: %v", err)
 	}

@@ -4,6 +4,7 @@ package yamux
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"io/ioutil"
 	"sync"
@@ -93,7 +94,7 @@ func TestSendData_VeryLarge(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			defer wg.Done()
-			stream, err := client.Open()
+			stream, err := client.Open(context.Background())
 			if err != nil {
 				t.Errorf("err: %v", err)
 				return
@@ -142,7 +143,7 @@ func TestLargeWindow(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.Open()
+	stream, err := client.Open(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

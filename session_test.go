@@ -2,6 +2,7 @@ package yamux
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -126,12 +127,12 @@ func TestClientClient(t *testing.T) {
 	defer client1.Close()
 	defer client2.Close()
 
-	_, _ = client1.OpenStream()
+	_, _ = client1.OpenStream(context.Background())
 	_, err := client2.AcceptStream()
 	if err == nil {
 		t.Fatalf("should have failed to open a stream with two clients")
 	}
-	_, _ = client2.OpenStream()
+	_, _ = client2.OpenStream(context.Background())
 	_, err = client1.AcceptStream()
 	if err == nil {
 		t.Fatalf("should have failed to open a stream with two clients")
@@ -149,18 +150,36 @@ func TestServerServer(t *testing.T) {
 	defer server1.Close()
 	defer server2.Close()
 
-	_, _ = server1.OpenStream()
+	_, _ = server1.OpenStream(context.Background())
 	_, err := server2.AcceptStream()
 	if err == nil {
 		t.Fatalf("should have failed to open a stream with two servers")
 	}
-	_, _ = server2.OpenStream()
+	_, _ = server2.OpenStream(context.Background())
 	_, err = server1.AcceptStream()
 	if err == nil {
 		t.Fatalf("should have failed to open a stream with two servers")
 	}
 	if !server1.IsClosed() || !server2.IsClosed() {
 		t.Fatalf("sessions should have been closed by errors")
+	}
+}
+
+func TestOpenStreamTimeout(t *testing.T) {
+	const limit = 7
+	cfg := testConf()
+	cfg.AcceptBacklog = limit
+	client, _ := testClientServerConfig(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for i := 0; i < limit; i++ {
+		if _, err := client.OpenStream(ctx); err != nil {
+			t.Fatalf("didn't expect OpenStream to fail %s", err.Error())
+		}
+	}
+	if _, err := client.OpenStream(ctx); err != context.DeadlineExceeded {
+		t.Fatal("expected OpenStream to run into the deadline")
 	}
 }
 
@@ -172,7 +191,7 @@ func TestStreamAfterShutdown(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			s, err := client.OpenStream()
+			s, err := client.OpenStream(context.Background())
 			if err == nil {
 				cb(s)
 				_ = s.Reset()
@@ -242,7 +261,7 @@ func TestCloseBeforeAck(t *testing.T) {
 	defer server.Close()
 
 	for i := 0; i < 8; i++ {
-		s, err := client.OpenStream()
+		s, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -260,7 +279,7 @@ func TestCloseBeforeAck(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s, err := client.OpenStream()
+		s, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Error(err)
 			return
@@ -329,7 +348,7 @@ func TestAccept(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		stream, err := server.OpenStream()
+		stream, err := server.OpenStream(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -346,7 +365,7 @@ func TestAccept(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		stream, err := client.OpenStream()
+		stream, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -386,7 +405,7 @@ func TestNonNilInterface(t *testing.T) {
 		t.Error("bad: accept should return a connection of nil value")
 	}
 
-	conn, err = server.Open()
+	conn, err = server.Open(context.Background())
 	if err != nil && conn != nil {
 		t.Error("bad: open should return a connection of nil value")
 	}
@@ -443,7 +462,7 @@ func TestSendData_Small(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		stream, err := client.OpenStream()
+		stream, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -554,7 +573,7 @@ func TestSendData_Large(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		stream, err := client.Open()
+		stream, err := client.Open(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -605,7 +624,7 @@ func TestGoAway(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		s, err := client.Open()
+		s, err := client.Open(context.Background())
 		switch err {
 		case nil:
 			s.Close()
@@ -652,7 +671,7 @@ func TestManyStreams(t *testing.T) {
 	}
 	sender := func(i int) {
 		defer wg.Done()
-		stream, err := client.Open()
+		stream, err := client.Open(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -738,7 +757,7 @@ func TestManyStreams_PingPong(t *testing.T) {
 	}
 	sender := func(i int) {
 		defer wg.Done()
-		stream, err := client.OpenStream()
+		stream, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -792,7 +811,7 @@ func TestCloseRead(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.OpenStream()
+	stream, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -818,7 +837,7 @@ func TestHalfClose(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.OpenStream()
+	stream, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -877,7 +896,7 @@ func TestReadDeadline(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.Open()
+	stream, err := client.Open(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -904,7 +923,7 @@ func TestWriteDeadlineWindowFull(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.Open()
+	stream, err := client.Open(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -940,7 +959,7 @@ func TestBacklogExceeded(t *testing.T) {
 	// Fill the backlog
 	max := client.config.AcceptBacklog
 	for i := 0; i < max; i++ {
-		stream, err := client.Open()
+		stream, err := client.Open(context.Background())
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -954,7 +973,7 @@ func TestBacklogExceeded(t *testing.T) {
 	// Attempt to open a new stream
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := client.Open()
+		_, err := client.Open(context.Background())
 		errCh <- err
 	}()
 
@@ -1067,7 +1086,7 @@ func TestBacklogExceeded_Accept(t *testing.T) {
 
 	// Fill the backlog
 	for i := 0; i < max; i++ {
-		stream, err := client.Open()
+		stream, err := client.Open(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 		}
@@ -1121,7 +1140,7 @@ func TestSession_WindowUpdateWriteDuringRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		stream, err := client.OpenStream()
+		stream, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			server.Close()
@@ -1188,7 +1207,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 		}
 	}()
 
-	stream, err := client.OpenStream()
+	stream, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1297,7 +1316,7 @@ func TestSession_ConnectionWriteTimeout(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		stream, err := client.OpenStream()
+		stream, err := client.OpenStream(context.Background())
 		if err != nil {
 			t.Errorf("err: %v", err)
 			return
@@ -1347,7 +1366,7 @@ func TestStreamResetWrite(t *testing.T) {
 		}
 	}()
 
-	stream, err := client.OpenStream()
+	stream, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1381,7 +1400,7 @@ func TestStreamHalfClose2(t *testing.T) {
 		wait <- struct{}{}
 	}()
 
-	stream, err := client.OpenStream()
+	stream, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Error(err)
 	}
@@ -1420,7 +1439,7 @@ func TestStreamResetRead(t *testing.T) {
 		}
 	}()
 
-	stream, err := client.OpenStream()
+	stream, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Error(err)
 	}
@@ -1486,13 +1505,13 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	}()
 
 	// stream1 is the clogger.
-	stream1, err := client.OpenStream()
+	stream1, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// all writes on stream2 will time out.
-	stream2, err := client.OpenStream()
+	stream2, err := client.OpenStream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1546,7 +1565,7 @@ func TestReadDeadlineInterrupt(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	stream, err := client.Open()
+	stream, err := client.Open(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
