@@ -2,6 +2,7 @@ package yamux
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -156,8 +157,8 @@ func (s *Session) NumStreams() int {
 }
 
 // Open is used to create a new stream as a net.Conn
-func (s *Session) Open() (net.Conn, error) {
-	conn, err := s.OpenStream()
+func (s *Session) Open(ctx context.Context) (net.Conn, error) {
+	conn, err := s.OpenStream(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +166,7 @@ func (s *Session) Open() (net.Conn, error) {
 }
 
 // OpenStream is used to create a new stream
-func (s *Session) OpenStream() (*Stream, error) {
+func (s *Session) OpenStream(ctx context.Context) (*Stream, error) {
 	if s.IsClosed() {
 		return nil, s.shutdownErr
 	}
@@ -176,6 +177,8 @@ func (s *Session) OpenStream() (*Stream, error) {
 	// Block if we have too many inflight SYNs
 	select {
 	case s.synCh <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-s.shutdownCh:
 		return nil, s.shutdownErr
 	}
