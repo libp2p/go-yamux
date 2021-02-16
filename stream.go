@@ -102,7 +102,12 @@ START:
 	s.recvLock.Lock()
 	if s.recvBuf.Len() == 0 {
 		s.recvLock.Unlock()
-		goto WAIT
+		select {
+		case <-s.recvNotifyCh:
+			goto START
+		case <-s.readDeadline.wait():
+			return 0, ErrTimeout
+		}
 	}
 
 	// Read any bytes
@@ -112,14 +117,6 @@ START:
 	// Send a window update potentially
 	err = s.sendWindowUpdate()
 	return n, err
-
-WAIT:
-	select {
-	case <-s.recvNotifyCh:
-		goto START
-	case <-s.readDeadline.wait():
-		return 0, ErrTimeout
-	}
 }
 
 // Write is used to write to the stream
@@ -164,7 +161,12 @@ START:
 	// If there is no data available, block
 	window := atomic.LoadUint32(&s.sendWindow)
 	if window == 0 {
-		goto WAIT
+		select {
+		case <-s.sendNotifyCh:
+			goto START
+		case <-s.writeDeadline.wait():
+			return 0, ErrTimeout
+		}
 	}
 
 	// Determine the flags if any
@@ -184,14 +186,6 @@ START:
 
 	// Unlock
 	return int(max), err
-
-WAIT:
-	select {
-	case <-s.sendNotifyCh:
-		goto START
-	case <-s.writeDeadline.wait():
-		return 0, ErrTimeout
-	}
 }
 
 // sendFlags determines any flags that are appropriate
