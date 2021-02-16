@@ -228,10 +228,7 @@ func (s *Stream) sendWindowUpdate() error {
 
 	// Send the header
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
-	if err := s.session.sendMsg(hdr, nil, nil); err != nil {
-		return err
-	}
-	return nil
+	return s.session.sendMsg(hdr, nil, nil)
 }
 
 // sendClose is used to send a FIN
@@ -375,7 +372,7 @@ func (s *Stream) cleanup() {
 
 // processFlags is used to update the state of the stream
 // based on set flags, if any. Lock must be held
-func (s *Stream) processFlags(flags uint16) error {
+func (s *Stream) processFlags(flags uint16) {
 	// Close the stream without holding the state lock
 	closeStream := false
 	defer func() {
@@ -414,7 +411,6 @@ func (s *Stream) processFlags(flags uint16) error {
 		closeStream = true
 		s.notifyWaiting()
 	}
-	return nil
 }
 
 // notifyWaiting notifies all the waiting channels
@@ -424,22 +420,16 @@ func (s *Stream) notifyWaiting() {
 }
 
 // incrSendWindow updates the size of our send window
-func (s *Stream) incrSendWindow(hdr header, flags uint16) error {
-	if err := s.processFlags(flags); err != nil {
-		return err
-	}
-
+func (s *Stream) incrSendWindow(hdr header, flags uint16) {
+	s.processFlags(flags)
 	// Increase window, unblock a sender
 	atomic.AddUint32(&s.sendWindow, hdr.Length())
 	asyncNotify(s.sendNotifyCh)
-	return nil
 }
 
 // readData is used to handle a data frame
 func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
-	if err := s.processFlags(flags); err != nil {
-		return err
-	}
+	s.processFlags(flags)
 
 	// Check that our recv window is not exceeded
 	length := hdr.Length()

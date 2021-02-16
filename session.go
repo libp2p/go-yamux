@@ -627,12 +627,7 @@ func (s *Session) handleStreamMessage(hdr header) error {
 
 	// Check if this is a window update
 	if hdr.MsgType() == typeWindowUpdate {
-		if err := stream.incrSendWindow(hdr, flags); err != nil {
-			if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
-				s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
-			}
-			return err
-		}
+		stream.incrSendWindow(hdr, flags)
 		return nil
 	}
 
