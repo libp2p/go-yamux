@@ -37,8 +37,7 @@ type Stream struct {
 	writeState, readState halfStreamState
 	stateLock             sync.Mutex
 
-	recvLock sync.Mutex
-	recvBuf  segmentedBuffer
+	recvBuf segmentedBuffer
 
 	recvNotifyCh chan struct{}
 	sendNotifyCh chan struct{}
@@ -97,9 +96,7 @@ START:
 	}
 
 	// If there is no data available, block
-	s.recvLock.Lock()
 	if s.recvBuf.Len() == 0 {
-		s.recvLock.Unlock()
 		select {
 		case <-s.recvNotifyCh:
 			goto START
@@ -110,7 +107,6 @@ START:
 
 	// Read any bytes
 	n, _ = s.recvBuf.Read(b)
-	s.recvLock.Unlock()
 
 	// Send a window update potentially
 	err = s.sendWindowUpdate()
@@ -437,7 +433,7 @@ func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
 		s.session.logger.Printf("[ERR] yamux: Failed to read stream data: %v", err)
 		return err
 	}
-	// Unblock any readers
+	// Unblock the reader
 	asyncNotify(s.recvNotifyCh)
 	return nil
 }
