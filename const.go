@@ -65,9 +65,6 @@ var (
 	// ErrConnectionWriteTimeout indicates that we hit the "safety valve"
 	// timeout writing to the underlying stream connection.
 	ErrConnectionWriteTimeout = &Error{msg: "connection write timeout", timeout: true}
-
-	// ErrKeepAliveTimeout is sent if a missed keepalive caused the stream close
-	ErrKeepAliveTimeout = &Error{msg: "keepalive timeout", timeout: true}
 )
 
 const (

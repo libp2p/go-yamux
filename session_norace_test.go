@@ -13,7 +13,7 @@ import (
 )
 
 func TestSession_PingOfDeath(t *testing.T) {
-	conf := testConfNoKeepAlive()
+	conf := testConf()
 	// This test is slow and can easily time out on writes on CI.
 	//
 	// In the future, we might want to prioritize ping-replies over even

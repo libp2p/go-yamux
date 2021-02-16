@@ -14,8 +14,6 @@ Yamux features include:
 * Flow control
   * Avoid starvation
   * Back-pressure to prevent overwhelming a receiver
-* Keep Alives
-  * Enables persistent connections over a load balancer
 * Efficient
   * Enables thousands of logical streams with low overhead
 

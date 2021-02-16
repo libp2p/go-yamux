@@ -97,14 +97,7 @@ func testConn() (conn1, conn2 net.Conn) {
 func testConf() *Config {
 	conf := DefaultConfig()
 	conf.AcceptBacklog = 64
-	conf.KeepAliveInterval = 100 * time.Millisecond
 	conf.ConnectionWriteTimeout = 350 * time.Millisecond
-	return conf
-}
-
-func testConfNoKeepAlive() *Config {
-	conf := testConf()
-	conf.EnableKeepAlive = false
 	return conf
 }
 
@@ -993,71 +986,6 @@ func TestBacklogExceeded(t *testing.T) {
 	}
 }
 
-func TestKeepAlive(t *testing.T) {
-	client, server := testClientServer()
-	defer client.Close()
-	defer server.Close()
-
-	time.Sleep(200 * time.Millisecond)
-
-	// Ping value should increase
-	client.pingLock.Lock()
-	defer client.pingLock.Unlock()
-	if client.pingID == 0 {
-		t.Fatalf("should ping")
-	}
-
-	server.pingLock.Lock()
-	defer server.pingLock.Unlock()
-	if server.pingID == 0 {
-		t.Fatalf("should ping")
-	}
-}
-
-func TestKeepAlive_Timeout(t *testing.T) {
-	conn1, conn2 := testConn()
-
-	clientConf := testConf()
-	clientConf.ConnectionWriteTimeout = time.Hour // We're testing keep alives, not connection writes
-	clientConf.EnableKeepAlive = false            // Just test one direction, so it's deterministic who hangs up on whom
-	client, _ := Client(conn1, clientConf)
-	defer client.Close()
-
-	serverLogs := new(logCapture)
-	serverConf := testConf()
-	serverConf.LogOutput = serverLogs
-
-	server, _ := Server(conn2, serverConf)
-	defer server.Close()
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := server.Accept() // Wait until server closes
-		errCh <- err
-	}()
-
-	// Prevent the client from responding
-	clientConn := client.conn.(*pipeConn)
-	clientConn.BlockWrites()
-
-	select {
-	case err := <-errCh:
-		if err != ErrKeepAliveTimeout {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timeout waiting for timeout")
-	}
-
-	if !server.IsClosed() {
-		t.Fatalf("server should have closed")
-	}
-
-	if !serverLogs.match([]string{"[ERR] yamux: keepalive failed: i/o deadline reached"}) {
-		t.Fatalf("server log incorect: %v", serverLogs.logs())
-	}
-}
-
 type UnlimitedReader struct{}
 
 func (u *UnlimitedReader) Read(p []byte) (int, error) {
@@ -1100,7 +1028,7 @@ func TestBacklogExceeded_Accept(t *testing.T) {
 }
 
 func TestSession_WindowUpdateWriteDuringRead(t *testing.T) {
-	client, server := testClientServerConfig(testConfNoKeepAlive())
+	client, server := testClientServerConfig(testConf())
 	defer client.Close()
 	defer server.Close()
 
@@ -1163,7 +1091,7 @@ func TestSession_WindowUpdateWriteDuringRead(t *testing.T) {
 }
 
 func TestSession_PartialReadWindowUpdate(t *testing.T) {
-	client, server := testClientServerConfig(testConfNoKeepAlive())
+	client, server := testClientServerConfig(testConf())
 	defer client.Close()
 	defer server.Close()
 
@@ -1238,7 +1166,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 }
 
 func TestSession_sendMsg_Timeout(t *testing.T) {
-	client, server := testClientServerConfig(testConfNoKeepAlive())
+	client, server := testClientServerConfig(testConf())
 	defer client.Close()
 	defer server.Close()
 
@@ -1265,7 +1193,7 @@ func TestWindowOverflow(t *testing.T) {
 	// 2. We unlock after resetting the stream.
 	for i := uint32(1); i < 100; i += 2 {
 		func() {
-			client, server := testClientServerConfig(testConfNoKeepAlive())
+			client, server := testClientServerConfig(testConf())
 			defer client.Close()
 			defer server.Close()
 
@@ -1287,7 +1215,7 @@ func TestWindowOverflow(t *testing.T) {
 }
 
 func TestSession_ConnectionWriteTimeout(t *testing.T) {
-	client, server := testClientServerConfig(testConfNoKeepAlive())
+	client, server := testClientServerConfig(testConf())
 	defer client.Close()
 	defer server.Close()
 
@@ -1463,7 +1391,6 @@ func TestStreamResetRead(t *testing.T) {
 
 func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	config := testConf()
-	config.EnableKeepAlive = false
 
 	client, server := testClientServerConfig(config)
 	defer client.Close()
