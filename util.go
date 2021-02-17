@@ -1,6 +1,7 @@
 package yamux
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -42,14 +43,12 @@ func min(values ...uint32) uint32 {
 //      |     data      | empty space       |
 //       < window (10)                     >
 //       < len (5)     > < cap (5)         >
-//                       < pending (4)    >
 //
 // As data is read, the buffer gets updated like so:
 //
 //         |     data   | empty space       |
 //          < window (8)                   >
 //          < len (3)  > < cap (5)         >
-//                       < pending (4)    >
 //
 // It can then grow as follows (given a "max" of 10):
 //
@@ -57,21 +56,18 @@ func min(values ...uint32) uint32 {
 //         |     data   | empty space          |
 //          < window (10)                     >
 //          < len (3)  > < cap (7)            >
-//                       < pending (4)    >
 //
-// Data can then be written into the pending space, expanding len, and shrinking
-// cap and pending:
+// Data can then be written into the empty space, expanding len,
+// and shrinking cap:
 //
 //         |     data       | empty space      |
 //          < window (10)                     >
 //          < len (5)      > < cap (5)        >
-//                           < pending (2)>
 //
 type segmentedBuffer struct {
-	cap     uint32
-	pending uint32
-	len     uint32
-	bm      sync.Mutex
+	cap uint32
+	len uint32
+	bm  sync.Mutex
 	// read position in b[0].
 	// We must not reslice any of the buffers in b, as we need to put them back into the pool.
 	readPos int
@@ -120,16 +116,6 @@ func (s *segmentedBuffer) GrowTo(max uint32, force bool) (bool, uint32) {
 	return true, delta
 }
 
-func (s *segmentedBuffer) TryReserve(space uint32) bool {
-	s.bm.Lock()
-	defer s.bm.Unlock()
-	if s.cap < s.pending+space {
-		return false
-	}
-	s.pending += space
-	return true
-}
-
 func (s *segmentedBuffer) Read(b []byte) (int, error) {
 	s.bm.Lock()
 	defer s.bm.Unlock()
@@ -152,7 +138,20 @@ func (s *segmentedBuffer) Read(b []byte) (int, error) {
 	return n, nil
 }
 
+func (s *segmentedBuffer) checkOverflow(l uint32) error {
+	s.bm.Lock()
+	defer s.bm.Unlock()
+	if s.cap < l {
+		return fmt.Errorf("receive window exceeded (remain: %d, recv: %d)", s.cap, l)
+	}
+	return nil
+}
+
 func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
+	if err := s.checkOverflow(length); err != nil {
+		return err
+	}
+
 	dst := pool.Get(int(length))
 	n, err := io.ReadFull(input, dst)
 	if err == io.EOF {
@@ -163,7 +162,6 @@ func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
 	if n > 0 {
 		s.len += uint32(n)
 		s.cap -= uint32(n)
-		s.pending = s.pending - length
 		s.b = append(s.b, dst[0:n])
 	}
 	return err
