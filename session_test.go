@@ -740,9 +740,6 @@ func TestManyStreams_PingPong(t *testing.T) {
 				return
 			}
 
-			// Shrink the internal buffer!
-			stream.Shrink()
-
 			// Write out the 'pong'
 			n, err = stream.Write(pong)
 			if err != nil {
@@ -791,9 +788,6 @@ func TestManyStreams_PingPong(t *testing.T) {
 				t.Errorf("bad: %s", buf)
 				return
 			}
-
-			// Shrink the buffer
-			stream.Shrink()
 		}
 	}
 
