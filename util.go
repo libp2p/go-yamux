@@ -86,16 +86,6 @@ func (s *segmentedBuffer) Len() uint32 {
 	return s.len
 }
 
-// Cap is the remaining capacity in the receive buffer.
-//
-// Note: this is _not_ the same as go's 'cap' function. The total size of the
-// buffer is len+cap.
-func (s *segmentedBuffer) Cap() uint32 {
-	s.bm.Lock()
-	defer s.bm.Unlock()
-	return s.cap
-}
-
 // If the space to write into + current buffer size has grown to half of the window size,
 // grow up to that max size, and indicate how much additional space was reserved.
 func (s *segmentedBuffer) GrowTo(max uint32, force bool) (bool, uint32) {

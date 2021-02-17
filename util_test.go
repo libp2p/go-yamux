@@ -58,7 +58,9 @@ func TestSegmentedBuffer(t *testing.T) {
 		if buf.Len() != len {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
 		}
-		if buf.Cap() != cap {
+		buf.bm.Lock()
+		defer buf.bm.Unlock()
+		if buf.cap != cap {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
 		}
 	}
