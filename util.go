@@ -72,6 +72,9 @@ type segmentedBuffer struct {
 	pending uint32
 	len     uint32
 	bm      sync.Mutex
+	// read position in b[0].
+	// We must not reslice any of the buffers in b, as we need to put them back into the pool.
+	readPos int
 	b       [][]byte
 }
 
@@ -135,13 +138,15 @@ func (s *segmentedBuffer) Read(b []byte) (int, error) {
 	if len(s.b) == 0 {
 		return 0, io.EOF
 	}
-	n := copy(b, s.b[0])
-	if n == len(s.b[0]) {
+	data := s.b[0][s.readPos:]
+	n := copy(b, data)
+	if n == len(data) {
 		pool.Put(s.b[0])
 		s.b[0] = nil
 		s.b = s.b[1:]
+		s.readPos = 0
 	} else {
-		s.b[0] = s.b[0][n:]
+		s.readPos += n
 	}
 	if n > 0 {
 		s.len -= uint32(n)
