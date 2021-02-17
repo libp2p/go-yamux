@@ -54,11 +54,11 @@ func TestMin(t *testing.T) {
 
 func TestSegmentedBuffer(t *testing.T) {
 	buf := newSegmentedBuffer(100)
-	assert := func(len, cap int) {
+	assert := func(len, cap uint32) {
 		if buf.Len() != len {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
 		}
-		if buf.Cap() != uint32(cap) {
+		if buf.Cap() != cap {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
 		}
 	}

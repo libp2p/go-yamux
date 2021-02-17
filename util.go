@@ -84,11 +84,10 @@ func newSegmentedBuffer(initialCapacity uint32) segmentedBuffer {
 }
 
 // Len is the amount of data in the receive buffer.
-func (s *segmentedBuffer) Len() int {
+func (s *segmentedBuffer) Len() uint32 {
 	s.bm.Lock()
-	len := s.len
-	s.bm.Unlock()
-	return int(len)
+	defer s.bm.Unlock()
+	return s.len
 }
 
 // Cap is the remaining capacity in the receive buffer.
@@ -97,9 +96,8 @@ func (s *segmentedBuffer) Len() int {
 // buffer is len+cap.
 func (s *segmentedBuffer) Cap() uint32 {
 	s.bm.Lock()
-	cap := s.cap
-	s.bm.Unlock()
-	return cap
+	defer s.bm.Unlock()
+	return s.cap
 }
 
 // If the space to write into + current buffer size has grown to half of the window size,
@@ -154,8 +152,8 @@ func (s *segmentedBuffer) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-func (s *segmentedBuffer) Append(input io.Reader, length int) error {
-	dst := pool.Get(length)
+func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
+	dst := pool.Get(int(length))
 	n, err := io.ReadFull(input, dst)
 	if err == io.EOF {
 		err = io.ErrUnexpectedEOF
@@ -165,7 +163,7 @@ func (s *segmentedBuffer) Append(input io.Reader, length int) error {
 	if n > 0 {
 		s.len += uint32(n)
 		s.cap -= uint32(n)
-		s.pending = s.pending - uint32(length)
+		s.pending = s.pending - length
 		s.b = append(s.b, dst[0:n])
 	}
 	return err

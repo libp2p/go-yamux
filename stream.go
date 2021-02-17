@@ -429,7 +429,7 @@ func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
 	}
 
 	// Copy into buffer
-	if err := s.recvBuf.Append(conn, int(length)); err != nil {
+	if err := s.recvBuf.Append(conn, length); err != nil {
 		s.session.logger.Printf("[ERR] yamux: Failed to read stream data: %v", err)
 		return err
 	}
