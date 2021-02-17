@@ -151,21 +151,10 @@ func (s *segmentedBuffer) Read(b []byte) (int, error) {
 
 func (s *segmentedBuffer) Append(input io.Reader, length int) error {
 	dst := pool.Get(length)
-	n := 0
-	read := 0
-	var err error
-	for n < length && err == nil {
-		read, err = input.Read(dst[n:])
-		n += read
-	}
+	n, err := io.ReadFull(input, dst)
 	if err == io.EOF {
-		if length == n {
-			err = nil
-		} else {
-			err = io.ErrUnexpectedEOF
-		}
+		err = io.ErrUnexpectedEOF
 	}
-
 	s.bm.Lock()
 	defer s.bm.Unlock()
 	if n > 0 {
