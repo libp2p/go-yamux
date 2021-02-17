@@ -40,8 +40,6 @@ type Stream struct {
 	recvLock sync.Mutex
 	recvBuf  segmentedBuffer
 
-	sendLock sync.Mutex
-
 	recvNotifyCh chan struct{}
 	sendNotifyCh chan struct{}
 
@@ -120,11 +118,8 @@ START:
 }
 
 // Write is used to write to the stream
-func (s *Stream) Write(b []byte) (n int, err error) {
-	s.sendLock.Lock()
-	defer s.sendLock.Unlock()
-	total := 0
-
+func (s *Stream) Write(b []byte) (int, error) {
+	var total int
 	for total < len(b) {
 		n, err := s.write(b[total:])
 		total += n
