@@ -144,15 +144,16 @@ func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
 
 	dst := pool.Get(int(length))
 	n, err := io.ReadFull(input, dst)
-	if err == io.EOF {
-		err = io.ErrUnexpectedEOF
+	if err != nil {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return err
 	}
 	s.bm.Lock()
 	defer s.bm.Unlock()
-	if n > 0 {
-		s.len += uint32(n)
-		s.cap -= uint32(n)
-		s.b = append(s.b, dst[0:n])
-	}
-	return err
+	s.len += uint32(n)
+	s.cap -= uint32(n)
+	s.b = append(s.b, dst[:n])
+	return nil
 }
