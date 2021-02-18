@@ -66,6 +66,7 @@ func min(values ...uint32) uint32 {
 //
 type segmentedBuffer struct {
 	cap uint32
+	max uint32
 	len uint32
 	bm  sync.Mutex
 	// read position in b[0].
@@ -75,8 +76,12 @@ type segmentedBuffer struct {
 }
 
 // NewSegmentedBuffer allocates a ring buffer.
-func newSegmentedBuffer(initialCapacity uint32) segmentedBuffer {
-	return segmentedBuffer{cap: initialCapacity, b: make([][]byte, 0)}
+func newSegmentedBuffer(initialCapacity, maxCapacity uint32) segmentedBuffer {
+	return segmentedBuffer{
+		cap: initialCapacity,
+		max: maxCapacity,
+		b:   make([][]byte, 0),
+	}
 }
 
 // Len is the amount of data in the receive buffer.
@@ -88,17 +93,17 @@ func (s *segmentedBuffer) Len() uint32 {
 
 // If the space to write into + current buffer size has grown to half of the window size,
 // grow up to that max size, and indicate how much additional space was reserved.
-func (s *segmentedBuffer) GrowTo(max uint32, force bool) (bool, uint32) {
+func (s *segmentedBuffer) GrowTo(force bool) (bool, uint32) {
 	s.bm.Lock()
 	defer s.bm.Unlock()
 
 	currentWindow := s.cap + s.len
-	if currentWindow >= max {
+	if currentWindow >= s.max {
 		return force, 0
 	}
-	delta := max - currentWindow
+	delta := s.max - currentWindow
 
-	if delta < (max/2) && !force {
+	if delta < (s.max/2) && !force {
 		return false, 0
 	}
 

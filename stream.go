@@ -55,7 +55,7 @@ func newStream(session *Session, id uint32, state streamState) *Stream {
 		sendWindow:    initialStreamWindow,
 		readDeadline:  makePipeDeadline(),
 		writeDeadline: makePipeDeadline(),
-		recvBuf:       newSegmentedBuffer(initialStreamWindow),
+		recvBuf:       newSegmentedBuffer(initialStreamWindow, session.config.MaxStreamWindowSize),
 		recvNotifyCh:  make(chan struct{}, 1),
 		sendNotifyCh:  make(chan struct{}, 1),
 	}
@@ -202,11 +202,8 @@ func (s *Stream) sendWindowUpdate() error {
 	// Determine the flags if any
 	flags := s.sendFlags()
 
-	// Determine the delta update
-	max := s.session.config.MaxStreamWindowSize
-
 	// Update our window
-	needed, delta := s.recvBuf.GrowTo(max, flags != 0)
+	needed, delta := s.recvBuf.GrowTo(flags != 0)
 	if !needed {
 		return nil
 	}

@@ -53,7 +53,7 @@ func TestMin(t *testing.T) {
 }
 
 func TestSegmentedBuffer(t *testing.T) {
-	buf := newSegmentedBuffer(100)
+	buf := newSegmentedBuffer(100, 100)
 	assert := func(len, cap uint32) {
 		if buf.Len() != len {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
@@ -79,10 +79,10 @@ func TestSegmentedBuffer(t *testing.T) {
 		t.Fatalf("expected to read 2 bytes, read %d", n)
 	}
 	assert(1, 97)
-	if grew, amount := buf.GrowTo(100, false); grew || amount != 0 {
+	if grew, amount := buf.GrowTo(false); grew || amount != 0 {
 		t.Fatal("should not grow when too small")
 	}
-	if grew, amount := buf.GrowTo(100, true); !grew || amount != 2 {
+	if grew, amount := buf.GrowTo(true); !grew || amount != 2 {
 		t.Fatal("should have grown by 2")
 	}
 
@@ -90,7 +90,7 @@ func TestSegmentedBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert(51, 49)
-	if grew, amount := buf.GrowTo(100, false); grew || amount != 0 {
+	if grew, amount := buf.GrowTo(false); grew || amount != 0 {
 		t.Fatal("should not grow when data hasn't been read")
 	}
 	read, err := io.CopyN(ioutil.Discard, &buf, 50)
@@ -102,7 +102,7 @@ func TestSegmentedBuffer(t *testing.T) {
 	}
 
 	assert(1, 49)
-	if grew, amount := buf.GrowTo(100, false); !grew || amount != 50 {
+	if grew, amount := buf.GrowTo(false); !grew || amount != 50 {
 		t.Fatal("should have grown when below half, even with reserved space")
 	}
 	assert(1, 99)
