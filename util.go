@@ -64,6 +64,8 @@ func min(values ...uint32) uint32 {
 //          < window (10)                     >
 //          < len (5)      > < cap (5)        >
 //
+const bufferSize = 1024
+
 type segmentedBuffer struct {
 	mutex sync.Mutex
 	cap   uint32
@@ -142,17 +144,24 @@ func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
 		return err
 	}
 
-	dst := pool.Get(int(length))
-	n, err := io.ReadFull(input, dst)
-	if err == io.EOF {
-		err = io.ErrUnexpectedEOF
-	}
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	if n > 0 {
+	for length > 0 {
+		dst := pool.Get(bufferSize)
+		if length < bufferSize {
+			dst = dst[:length]
+		}
+		n, err := io.ReadFull(input, dst)
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return err
+		}
+		length -= uint32(n)
+		s.mutex.Lock()
 		s.len += uint32(n)
 		s.cap -= uint32(n)
-		s.b = append(s.b, dst[0:n])
+		s.b = append(s.b, dst)
+		s.mutex.Unlock()
 	}
-	return err
+	return nil
 }

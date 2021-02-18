@@ -2,8 +2,11 @@ package yamux
 
 import (
 	"bytes"
+	"crypto/rand"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"testing"
 )
 
@@ -106,4 +109,32 @@ func TestSegmentedBuffer(t *testing.T) {
 		t.Fatal("should have grown when below half, even with reserved space")
 	}
 	assert(1, 99)
+}
+
+func TestSegmentedBuffer_Long(t *testing.T) {
+	buf := newSegmentedBuffer(math.MaxUint32)
+	const size = 2 * bufferSize
+	data := make([]byte, size)
+	rand.Read(data)
+
+	errChan := make(chan error)
+	go func() {
+		defer close(errChan)
+		b := make([]byte, size)
+		if _, err := io.ReadFull(&buf, b); err != nil {
+			errChan <- err
+			return
+		}
+		if !bytes.Equal(b, data) {
+			errChan <- fmt.Errorf("expected to read %#x, got %#x", data, b)
+		}
+	}()
+
+	r := bytes.NewReader(data)
+	if err := buf.Append(r, size); err != nil {
+		t.Fatal(err)
+	}
+	if err, ok := <-errChan; ok {
+		t.Fatal(err)
+	}
 }
