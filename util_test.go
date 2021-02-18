@@ -54,18 +54,17 @@ func TestMin(t *testing.T) {
 
 func TestSegmentedBuffer(t *testing.T) {
 	buf := newSegmentedBuffer(100)
-	assert := func(len, cap int) {
+	assert := func(len, cap uint32) {
 		if buf.Len() != len {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
 		}
-		if buf.Cap() != uint32(cap) {
+		buf.bm.Lock()
+		defer buf.bm.Unlock()
+		if buf.cap != cap {
 			t.Fatalf("expected length %d, got %d", len, buf.Len())
 		}
 	}
 	assert(0, 100)
-	if !buf.TryReserve(3) {
-		t.Fatal("reservation should have worked")
-	}
 	if err := buf.Append(bytes.NewReader([]byte("fooo")), 3); err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +86,6 @@ func TestSegmentedBuffer(t *testing.T) {
 		t.Fatal("should have grown by 2")
 	}
 
-	if !buf.TryReserve(50) {
-		t.Fatal("reservation should have worked")
-	}
 	if err := buf.Append(bytes.NewReader(make([]byte, 50)), 50); err != nil {
 		t.Fatal(err)
 	}
@@ -104,9 +100,7 @@ func TestSegmentedBuffer(t *testing.T) {
 	if read != 50 {
 		t.Fatal("expected to read 50 bytes")
 	}
-	if !buf.TryReserve(49) {
-		t.Fatal("should have been able to reserve rest of space")
-	}
+
 	assert(1, 49)
 	if grew, amount := buf.GrowTo(100, false); !grew || amount != 50 {
 		t.Fatal("should have grown when below half, even with reserved space")
