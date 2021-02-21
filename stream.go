@@ -462,7 +462,3 @@ func (s *Stream) SetWriteDeadline(t time.Time) error {
 	}
 	return nil
 }
-
-// Shrink is a no-op. The internal buffer automatically shrinks itself.
-func (s *Stream) Shrink() {
-}
