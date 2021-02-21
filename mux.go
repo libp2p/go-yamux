@@ -63,7 +63,7 @@ func DefaultConfig() *Config {
 		MaxStreamWindowSize:    initialStreamWindow,
 		LogOutput:              os.Stderr,
 		ReadBufSize:            4096,
-		MaxMessageSize:         64 * 1024, // Means 64KiB/10s = 52kbps minimum speed.
+		MaxMessageSize:         64 * 1024,
 		WriteCoalesceDelay:     100 * time.Microsecond,
 	}
 }
