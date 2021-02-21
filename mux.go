@@ -60,7 +60,7 @@ func DefaultConfig() *Config {
 		EnableKeepAlive:        true,
 		KeepAliveInterval:      30 * time.Second,
 		ConnectionWriteTimeout: 10 * time.Second,
-		MaxStreamWindowSize:    initialStreamWindow,
+		MaxStreamWindowSize:    maxStreamWindow,
 		LogOutput:              os.Stderr,
 		ReadBufSize:            4096,
 		MaxMessageSize:         64 * 1024, // Means 64KiB/10s = 52kbps minimum speed.

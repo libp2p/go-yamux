@@ -3,7 +3,9 @@ package yamux
 import (
 	"fmt"
 	"io"
+	"math"
 	"sync"
+	"time"
 
 	pool "github.com/libp2p/go-buffer-pool"
 )
@@ -65,22 +67,29 @@ func min(values ...uint32) uint32 {
 //          < len (5)      > < cap (5)        >
 //
 type segmentedBuffer struct {
-	cap uint32
-	max uint32
-	len uint32
-	bm  sync.Mutex
+	cap           uint32
+	len           uint32
+	windowSize    uint32
+	maxWindowSize uint32
+	bm            sync.Mutex
 	// read position in b[0].
 	// We must not reslice any of the buffers in b, as we need to put them back into the pool.
 	readPos int
 	b       [][]byte
+
+	epochStart time.Time
+	getRTT     func() time.Duration
 }
 
 // NewSegmentedBuffer allocates a ring buffer.
-func newSegmentedBuffer(initialCapacity, maxCapacity uint32) segmentedBuffer {
+func newSegmentedBuffer(initialCapacity, maxWindowSize uint32, getRTT func() time.Duration) segmentedBuffer {
 	return segmentedBuffer{
-		cap: initialCapacity,
-		max: maxCapacity,
-		b:   make([][]byte, 0),
+		cap:           initialCapacity,
+		windowSize:    initialCapacity,
+		maxWindowSize: maxWindowSize,
+		b:             make([][]byte, 0),
+		epochStart:    time.Now(),
+		getRTT:        getRTT,
 	}
 }
 
@@ -93,18 +102,35 @@ func (s *segmentedBuffer) Len() uint32 {
 
 // If the space to write into + current buffer size has grown to half of the window size,
 // grow up to that max size, and indicate how much additional space was reserved.
-func (s *segmentedBuffer) GrowTo(force bool) (bool, uint32) {
+func (s *segmentedBuffer) GrowTo(force bool, now time.Time) (bool, uint32) {
+	grow, delta := s.growTo(force, now)
+	if grow {
+		s.epochStart = now
+	}
+	return grow, delta
+}
+
+func (s *segmentedBuffer) growTo(force bool, now time.Time) (bool, uint32) {
 	s.bm.Lock()
 	defer s.bm.Unlock()
 
 	currentWindow := s.cap + s.len
-	if currentWindow >= s.max {
+	if currentWindow >= s.windowSize {
 		return force, 0
 	}
-	delta := s.max - currentWindow
+	delta := s.windowSize - currentWindow
 
-	if delta < (s.max/2) && !force {
+	if delta < (s.windowSize/2) && !force {
 		return false, 0
+	}
+
+	if rtt := s.getRTT(); rtt > 0 && now.Sub(s.epochStart) < 2*rtt {
+		if s.windowSize > math.MaxUint32/2 {
+			s.windowSize = min(math.MaxUint32, s.maxWindowSize)
+		} else {
+			s.windowSize = min(s.windowSize*2, s.maxWindowSize)
+		}
+		delta = s.windowSize - currentWindow
 	}
 
 	s.cap += delta

@@ -50,6 +50,8 @@ type Session struct {
 	pingID     uint32
 	activePing *ping
 
+	rtt int64 // to be accessed atomically, in nanoseconds
+
 	// streams maps a stream id to a stream, and inflight has an entry
 	// for any outgoing stream that has not yet been established. Both are
 	// protected by streamLock.
@@ -129,6 +131,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 	}
 	go s.recv()
 	go s.send()
+	go s.measureRTT()
 	return s
 }
 
@@ -289,6 +292,19 @@ func (s *Session) goAway(reason uint32) header {
 	atomic.SwapInt32(&s.localGoAway, 1)
 	hdr := encode(typeGoAway, 0, 0, reason)
 	return hdr
+}
+
+func (s *Session) measureRTT() {
+	rtt, err := s.Ping()
+	if err != nil {
+		return
+	}
+	atomic.StoreInt64(&s.rtt, rtt.Nanoseconds())
+}
+
+// 0 if we don't yet have a measurement
+func (s *Session) getRTT() time.Duration {
+	return time.Duration(atomic.LoadInt64(&s.rtt))
 }
 
 // Ping is used to measure the RTT response time

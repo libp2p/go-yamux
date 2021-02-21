@@ -1171,7 +1171,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	wg.Add(1)
 
 	// Choose a huge flood size that we know will result in a window update.
-	flood := int64(client.config.MaxStreamWindowSize)
+	flood := int64(initialStreamWindow)
 	var wr *Stream
 
 	// The server will accept a new stream and then flood data to it.
@@ -1186,8 +1186,8 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 		}
 
 		sendWindow := atomic.LoadUint32(&wr.sendWindow)
-		if sendWindow != client.config.MaxStreamWindowSize {
-			t.Errorf("sendWindow: exp=%d, got=%d", client.config.MaxStreamWindowSize, sendWindow)
+		if sendWindow != initialStreamWindow {
+			t.Errorf("sendWindow: exp=%d, got=%d", initialStreamWindow, sendWindow)
 			return
 		}
 
