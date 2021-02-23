@@ -1221,8 +1221,9 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	}
 
 	var (
-		exp        = uint32(flood / 2)
-		sendWindow uint32
+		expWithoutWindowIncrease = uint32(flood / 2)
+		expWithWindowIncrease    = uint32(flood * 3 / 2)
+		sendWindow               uint32
 	)
 
 	// This test is racy. Wait a short period, then longer and longer. At
@@ -1230,11 +1231,11 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	for i := 1; i < 15; i++ {
 		time.Sleep(time.Duration(i*i) * time.Millisecond)
 		sendWindow = atomic.LoadUint32(&wr.sendWindow)
-		if sendWindow == exp {
+		if sendWindow == expWithoutWindowIncrease || sendWindow == expWithWindowIncrease {
 			return
 		}
 	}
-	t.Errorf("sendWindow: exp=%d, got=%d", exp, sendWindow)
+	t.Errorf("sendWindow: exp=%d or %d, got=%d", expWithoutWindowIncrease, expWithWindowIncrease, sendWindow)
 }
 
 func TestSession_sendMsg_Timeout(t *testing.T) {
