@@ -159,7 +159,7 @@ func TestLargeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buf := make([]byte, conf.MaxStreamWindowSize)
+	buf := make([]byte, initialStreamWindow)
 	n, err := stream.Write(buf)
 	if err != nil {
 		t.Fatalf("err: %v", err)

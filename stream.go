@@ -2,6 +2,7 @@ package yamux
 
 import (
 	"io"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,9 @@ type Stream struct {
 	id      uint32
 	session *Session
 
+	recvWindow uint32
+	epochStart time.Time
+
 	state                 streamState
 	writeState, readState halfStreamState
 	stateLock             sync.Mutex
@@ -48,6 +52,7 @@ type Stream struct {
 // newStream is used to construct a new stream within
 // a given session for an ID
 func newStream(session *Session, id uint32, state streamState) *Stream {
+	initialStreamWindow := session.config.InitialStreamWindowSize
 	s := &Stream{
 		id:            id,
 		session:       session,
@@ -56,6 +61,8 @@ func newStream(session *Session, id uint32, state streamState) *Stream {
 		readDeadline:  makePipeDeadline(),
 		writeDeadline: makePipeDeadline(),
 		recvBuf:       newSegmentedBuffer(initialStreamWindow),
+		recvWindow:    initialStreamWindow,
+		epochStart:    time.Now(),
 		recvNotifyCh:  make(chan struct{}, 1),
 		sendNotifyCh:  make(chan struct{}, 1),
 	}
@@ -202,16 +209,25 @@ func (s *Stream) sendWindowUpdate() error {
 	// Determine the flags if any
 	flags := s.sendFlags()
 
-	// Determine the delta update
-	max := s.session.config.MaxStreamWindowSize
-
-	// Update our window
-	needed, delta := s.recvBuf.GrowTo(max, flags != 0)
+	// Update the receive window.
+	needed, delta := s.recvBuf.GrowTo(s.recvWindow, flags != 0)
 	if !needed {
 		return nil
 	}
-
-	// Send the header
+	now := time.Now()
+	if rtt := s.session.getRTT(); rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
+		var recvWindow uint32
+		if s.recvWindow > math.MaxUint32/2 {
+			recvWindow = min(math.MaxUint32, s.session.config.MaxStreamWindowSize)
+		} else {
+			recvWindow = min(s.recvWindow*2, s.session.config.MaxStreamWindowSize)
+		}
+		if recvWindow > s.recvWindow {
+			s.recvWindow = recvWindow
+			_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
+		}
+	}
+	s.epochStart = now
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
 	return s.session.sendMsg(hdr, nil, nil)
 }

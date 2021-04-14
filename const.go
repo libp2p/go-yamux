@@ -114,7 +114,8 @@ const (
 
 const (
 	// initialStreamWindow is the initial stream window size
-	initialStreamWindow uint32 = 256 * 1024
+	initialStreamWindow uint32 = 64 * 1024
+	maxStreamWindow     uint32 = 16 * 1024 * 1024
 )
 
 const (
