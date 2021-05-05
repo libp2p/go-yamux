@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 type logCapture struct{ bytes.Buffer }
@@ -1005,20 +1007,18 @@ func TestKeepAlive(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	time.Sleep(200 * time.Millisecond)
-
 	// Ping value should increase
-	client.pingLock.Lock()
-	defer client.pingLock.Unlock()
-	if client.pingID == 0 {
-		t.Fatalf("should ping")
-	}
+	require.Eventually(t, func() bool {
+		client.pingLock.Lock()
+		defer client.pingLock.Unlock()
+		return client.pingID > 0
+	}, time.Second, 50*time.Millisecond, "should ping")
 
-	server.pingLock.Lock()
-	defer server.pingLock.Unlock()
-	if server.pingID == 0 {
-		t.Fatalf("should ping")
-	}
+	require.Eventually(t, func() bool {
+		server.pingLock.Lock()
+		defer server.pingLock.Unlock()
+		return server.pingID > 0
+	}, time.Second, 50*time.Millisecond, "should ping")
 }
 
 func TestKeepAlive_Timeout(t *testing.T) {
