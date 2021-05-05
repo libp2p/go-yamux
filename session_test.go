@@ -1673,7 +1673,7 @@ func TestReadDeadlineInterrupt(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(10 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("read should have finished")
 	}
 
