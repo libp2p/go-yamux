@@ -1165,7 +1165,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	wg.Add(1)
 
 	// Choose a huge flood size that we know will result in a window update.
-	flood := int64(client.config.MaxStreamWindowSize)
+	flood := int64(initialStreamWindow)
 	var wr *Stream
 
 	// The server will accept a new stream and then flood data to it.
@@ -1180,8 +1180,8 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 		}
 
 		sendWindow := atomic.LoadUint32(&wr.sendWindow)
-		if sendWindow != client.config.MaxStreamWindowSize {
-			t.Errorf("sendWindow: exp=%d, got=%d", client.config.MaxStreamWindowSize, sendWindow)
+		if sendWindow != initialStreamWindow {
+			t.Errorf("sendWindow: exp=%d, got=%d", client.config.InitialStreamWindowSize, sendWindow)
 			return
 		}
 
@@ -1215,8 +1215,9 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	}
 
 	var (
-		exp        = uint32(flood / 2)
-		sendWindow uint32
+		expWithoutWindowIncrease = uint32(flood / 2)
+		expWithWindowIncrease    = uint32(flood)
+		sendWindow               uint32
 	)
 
 	// This test is racy. Wait a short period, then longer and longer. At
@@ -1224,12 +1225,78 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 	for i := 1; i < 15; i++ {
 		time.Sleep(time.Duration(i*i) * time.Millisecond)
 		sendWindow = atomic.LoadUint32(&wr.sendWindow)
-		if sendWindow == exp {
+		if sendWindow == expWithoutWindowIncrease || sendWindow == expWithWindowIncrease {
 			return
 		}
 	}
-	t.Errorf("sendWindow: exp=%d, got=%d", exp, sendWindow)
+	t.Errorf("sendWindow: exp=%d or %d, got=%d", expWithoutWindowIncrease, expWithWindowIncrease, sendWindow)
 }
+
+// func TestSession_WindowAutoSizing(t *testing.T) {
+// 	const initialWindow uint32 = 10
+// 	conf := testConfNoKeepAlive()
+// 	conf.InitialStreamWindowSize = initialWindow
+// 	client, server := testClientServerConfig(conf)
+// 	defer client.Close()
+// 	defer server.Close()
+
+// 	receiveAndConsume := func(str *Stream, size uint32) {
+// 		if _, err := str.Read(make([]byte, size)); err != nil {
+// 			t.Fatal(err)
+// 		}
+// 	}
+
+// 	clientStr, err := client.OpenStream(context.Background())
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	serverStr, err := server.AcceptStream()
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+
+// 	const rtt = 20 * time.Millisecond
+// 	t.Run("finding the window size", func(t *testing.T) {
+// 		// Consume a maximum of 1234 bytes per RTT.
+// 		// We expect the window to be scaled such that we send one update every 2 RTTs.
+// 		go func() {
+// 			for {
+// 				serverStr.Write(make([]byte, 100))
+// 			}
+// 		}()
+
+// 		var counter int
+// 		ticker := time.NewTicker(rtt)
+// 		for range ticker.C {
+// 			receiveAndConsume(clientStr, 1234)
+// 			counter++
+// 			if counter > 25 {
+// 				break
+// 			}
+// 		}
+// 		fmt.Println(clientStr.recvWindow)
+// 	})
+// 	// t.Run("capping the window size", func(t *testing.T) {
+// 	// 	const maxWindow = 78 * initialWindow
+// 	// 	buf := newSegmentedBuffer(initialWindow, maxWindow, func() time.Duration { return rtt })
+// 	// 	start := time.Now()
+// 	// 	// Consume a maximum of 1234 bytes per RTT.
+// 	// 	// We expect the window to be scaled such that we send one update every 2 RTTs.
+// 	// 	now := start
+// 	// 	delta := initialWindow
+// 	// 	for i := 0; i < 100; i++ {
+// 	// 		now = now.Add(rtt)
+// 	// 		receiveAndConsume(&buf, delta)
+// 	// 		grow, d := buf.GrowTo(false, now)
+// 	// 		if grow {
+// 	// 			delta = d
+// 	// 		}
+// 	// 	}
+// 	// 	if buf.windowSize != maxWindow {
+// 	// 		t.Fatalf("expected the window size to be at max (%d), got %d", maxWindow, buf.windowSize)
+// 	// 	}
+// 	// })
+// }
 
 func TestSession_sendMsg_Timeout(t *testing.T) {
 	client, server := testClientServerConfig(testConfNoKeepAlive())
