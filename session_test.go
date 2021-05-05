@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 type logCapture struct{ bytes.Buffer }
@@ -235,6 +237,13 @@ func TestPing(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
+	clientConn := client.conn.(*pipeConn)
+	clientConn.BlockWrites()
+	go func() {
+		time.Sleep(time.Millisecond)
+		clientConn.UnblockWrites()
+	}()
+
 	rtt, err := client.Ping()
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -242,6 +251,12 @@ func TestPing(t *testing.T) {
 	if rtt == 0 {
 		t.Fatalf("bad: %v", rtt)
 	}
+
+	clientConn.BlockWrites()
+	go func() {
+		time.Sleep(time.Millisecond)
+		clientConn.UnblockWrites()
+	}()
 
 	rtt, err = server.Ping()
 	if err != nil {
@@ -992,20 +1007,18 @@ func TestKeepAlive(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	time.Sleep(200 * time.Millisecond)
-
 	// Ping value should increase
-	client.pingLock.Lock()
-	defer client.pingLock.Unlock()
-	if client.pingID == 0 {
-		t.Fatalf("should ping")
-	}
+	require.Eventually(t, func() bool {
+		client.pingLock.Lock()
+		defer client.pingLock.Unlock()
+		return client.pingID > 0
+	}, time.Second, 50*time.Millisecond, "should ping")
 
-	server.pingLock.Lock()
-	defer server.pingLock.Unlock()
-	if server.pingID == 0 {
-		t.Fatalf("should ping")
-	}
+	require.Eventually(t, func() bool {
+		server.pingLock.Lock()
+		defer server.pingLock.Unlock()
+		return server.pingID > 0
+	}, time.Second, 50*time.Millisecond, "should ping")
 }
 
 func TestKeepAlive_Timeout(t *testing.T) {
@@ -1660,7 +1673,7 @@ func TestReadDeadlineInterrupt(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(10 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("read should have finished")
 	}
 
