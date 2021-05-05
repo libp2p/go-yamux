@@ -235,6 +235,13 @@ func TestPing(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
+	clientConn := client.conn.(*pipeConn)
+	clientConn.BlockWrites()
+	go func() {
+		time.Sleep(time.Millisecond)
+		clientConn.UnblockWrites()
+	}()
+
 	rtt, err := client.Ping()
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -242,6 +249,12 @@ func TestPing(t *testing.T) {
 	if rtt == 0 {
 		t.Fatalf("bad: %v", rtt)
 	}
+
+	clientConn.BlockWrites()
+	go func() {
+		time.Sleep(time.Millisecond)
+		clientConn.UnblockWrites()
+	}()
 
 	rtt, err = server.Ping()
 	if err != nil {
