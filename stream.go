@@ -214,8 +214,9 @@ func (s *Stream) sendWindowUpdate() error {
 	if !needed {
 		return nil
 	}
+
 	now := time.Now()
-	if rtt := s.session.getRTT(); rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
+	if rtt := s.session.getRTT(); flags == 0 && rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
 		var recvWindow uint32
 		if s.recvWindow > math.MaxUint32/2 {
 			recvWindow = min(math.MaxUint32, s.session.config.MaxStreamWindowSize)
