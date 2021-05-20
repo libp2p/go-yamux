@@ -113,8 +113,9 @@ const (
 )
 
 const (
-	// initialStreamWindow is the initial stream window size
-	initialStreamWindow uint32 = 64 * 1024
+	// initialStreamWindow is the initial stream window size.
+	// It's not an implementation choice, the value defined in the specification.
+	initialStreamWindow uint32 = 256 * 1024
 	maxStreamWindow     uint32 = 16 * 1024 * 1024
 )
 

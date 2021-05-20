@@ -1194,7 +1194,7 @@ func TestSession_PartialReadWindowUpdate(t *testing.T) {
 
 		sendWindow := atomic.LoadUint32(&wr.sendWindow)
 		if sendWindow != initialStreamWindow {
-			t.Errorf("sendWindow: exp=%d, got=%d", client.config.InitialStreamWindowSize, sendWindow)
+			t.Errorf("sendWindow: exp=%d, got=%d", initialStreamWindow, sendWindow)
 		}
 
 		n, err := wr.Write(make([]byte, flood))
