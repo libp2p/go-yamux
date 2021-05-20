@@ -52,7 +52,6 @@ type Stream struct {
 // newStream is used to construct a new stream within
 // a given session for an ID
 func newStream(session *Session, id uint32, state streamState) *Stream {
-	initialStreamWindow := session.config.InitialStreamWindowSize
 	s := &Stream{
 		id:            id,
 		session:       session,
