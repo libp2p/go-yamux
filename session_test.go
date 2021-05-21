@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"reflect"
 	"runtime"
@@ -1680,6 +1681,54 @@ func TestReadDeadlineInterrupt(t *testing.T) {
 		buf := make([]byte, 4)
 		if _, err := stream.Read(buf); err != ErrTimeout {
 			t.Fatalf("err: %v", err)
+		}
+	}
+}
+
+// Make sure that a transfer doesn't stall, no matter what values the peers use for their InitialStreamWindow.
+func TestInitialStreamWindow(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		const (
+			maxWindow    = 5 * initialStreamWindow
+			transferSize = 10 * maxWindow
+		)
+		rand.Seed(time.Now().UnixNano())
+		randomUint32 := func(min, max uint32) uint32 { return uint32(rand.Int63n(int64(max-min))) + min }
+
+		cconf := DefaultConfig()
+		cconf.InitialStreamWindowSize = randomUint32(initialStreamWindow, maxWindow)
+		sconf := DefaultConfig()
+		sconf.InitialStreamWindowSize = randomUint32(initialStreamWindow, maxWindow)
+
+		conn1, conn2 := testConn()
+		client, _ := Client(conn1, cconf)
+		server, _ := Server(conn2, sconf)
+
+		errChan := make(chan error, 1)
+		go func() {
+			defer close(errChan)
+			str, err := client.OpenStream(context.Background())
+			if err != nil {
+				errChan <- err
+				return
+			}
+			defer str.Close()
+			if _, err := str.Write(make([]byte, transferSize)); err != nil {
+				errChan <- err
+				return
+			}
+		}()
+
+		str, err := server.AcceptStream()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := ioutil.ReadAll(str)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uint32(len(data)) != transferSize {
+			t.Fatalf("expected %d bytes to be transferred, got %d", transferSize, len(data))
 		}
 	}
 }

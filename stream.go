@@ -59,11 +59,14 @@ func newStream(session *Session, id uint32, state streamState) *Stream {
 		sendWindow:    initialStreamWindow,
 		readDeadline:  makePipeDeadline(),
 		writeDeadline: makePipeDeadline(),
-		recvBuf:       newSegmentedBuffer(initialStreamWindow),
-		recvWindow:    initialStreamWindow,
-		epochStart:    time.Now(),
-		recvNotifyCh:  make(chan struct{}, 1),
-		sendNotifyCh:  make(chan struct{}, 1),
+		// Initialize the recvBuf with initialStreamWindow, not config.InitialStreamWindowSize.
+		// The peer isn't allowed to send more data than initialStreamWindow until we've sent
+		// the first window update (which will grant it up to config.InitialStreamWindowSize).
+		recvBuf:      newSegmentedBuffer(initialStreamWindow),
+		recvWindow:   session.config.InitialStreamWindowSize,
+		epochStart:   time.Now(),
+		recvNotifyCh: make(chan struct{}, 1),
+		sendNotifyCh: make(chan struct{}, 1),
 	}
 	return s
 }
