@@ -83,7 +83,6 @@ func (s *Stream) StreamID() uint32 {
 
 // Read is used to read from the stream
 func (s *Stream) Read(b []byte) (n int, err error) {
-	defer asyncNotify(s.recvNotifyCh)
 START:
 	s.stateLock.Lock()
 	state := s.readState
