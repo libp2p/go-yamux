@@ -68,15 +68,16 @@ type segmentedBuffer struct {
 	cap uint32
 	len uint32
 	bm  sync.Mutex
-	// read position in b[0].
+	// read position in b[bPos].
 	// We must not reslice any of the buffers in b, as we need to put them back into the pool.
 	readPos int
+	bPos    int
 	b       [][]byte
 }
 
 // NewSegmentedBuffer allocates a ring buffer.
 func newSegmentedBuffer(initialCapacity uint32) segmentedBuffer {
-	return segmentedBuffer{cap: initialCapacity, b: make([][]byte, 0)}
+	return segmentedBuffer{cap: initialCapacity, b: make([][]byte, 0, 16)}
 }
 
 // Len is the amount of data in the receive buffer.
@@ -109,15 +110,15 @@ func (s *segmentedBuffer) GrowTo(max uint32, force bool) (bool, uint32) {
 func (s *segmentedBuffer) Read(b []byte) (int, error) {
 	s.bm.Lock()
 	defer s.bm.Unlock()
-	if len(s.b) == 0 {
+	if s.bPos == len(s.b) {
 		return 0, io.EOF
 	}
-	data := s.b[0][s.readPos:]
+	data := s.b[s.bPos][s.readPos:]
 	n := copy(b, data)
 	if n == len(data) {
-		pool.Put(s.b[0])
-		s.b[0] = nil
-		s.b = s.b[1:]
+		pool.Put(s.b[s.bPos])
+		s.b[s.bPos] = nil
+		s.bPos++
 		s.readPos = 0
 	} else {
 		s.readPos += n
@@ -152,6 +153,22 @@ func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
 	if n > 0 {
 		s.len += uint32(n)
 		s.cap -= uint32(n)
+		// we are out of cap
+		if len(s.b) == cap(s.b) && s.bPos > 0 {
+			if s.bPos == len(s.b) {
+				// have no unread chunks, just move pos
+				s.bPos = 0
+				s.b = s.b[:0]
+			} else {
+				// have unread chunks, but also have space at the start of slice, so shift it to the left
+				copied := copy(s.b, s.b[s.bPos:])
+				for i := copied; i < len(s.b); i++ {
+					s.b[i] = nil
+				}
+				s.b = s.b[:copied]
+				s.bPos = 0
+			}
+		}
 		s.b = append(s.b, dst[0:n])
 	}
 	return err

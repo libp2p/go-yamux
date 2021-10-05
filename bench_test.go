@@ -54,6 +54,7 @@ func BenchmarkSendRecv(b *testing.B) {
 	recvBuf := make([]byte, 512)
 
 	doneCh := make(chan struct{})
+	b.ResetTimer()
 	go func() {
 		defer close(doneCh)
 		defer server.Close()
