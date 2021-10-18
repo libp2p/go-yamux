@@ -159,7 +159,7 @@ func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
 				// have no unread chunks, just move pos
 				s.bPos = 0
 				s.b = s.b[:0]
-			} else {
+			} else if s.bPos > cap(s.b)/4 {
 				// have unread chunks, but also have space at the start of slice, so shift it to the left
 				copied := copy(s.b, s.b[s.bPos:])
 				for i := copied; i < len(s.b); i++ {
