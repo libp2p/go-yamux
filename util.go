@@ -71,8 +71,13 @@ type segmentedBuffer struct {
 	// read position in b[bPos].
 	// We must not reslice any of the buffers in b, as we need to put them back into the pool.
 	readPos int
-	bPos    int
-	b       [][]byte
+	// bPos is an index in b slice. If bPos == len(b), it means that buffer is empty.
+	bPos int
+	// b is used as a growable buffer. Each Append adds []byte to the end of b.
+	// If there is no space available at the end of the buffer (len(b) == cap(b)), but it has space
+	// at the beginning (bPos > 0 and at least 1/4 of the buffer is empty), data inside b is shifted to the beginning.
+	// Each Read reads from b[bPos] and increments bPos if b[bPos] was fully read.
+	b [][]byte
 }
 
 // NewSegmentedBuffer allocates a ring buffer.
@@ -153,15 +158,16 @@ func (s *segmentedBuffer) Append(input io.Reader, length uint32) error {
 	if n > 0 {
 		s.len += uint32(n)
 		s.cap -= uint32(n)
-		// we are out of cap
+		// s.b has no available space at the end, but has space at the beginning
 		if len(s.b) == cap(s.b) && s.bPos > 0 {
 			if s.bPos == len(s.b) {
-				// have no unread chunks, just move pos
+				// the buffer is empty, so just move pos
 				s.bPos = 0
 				s.b = s.b[:0]
 			} else if s.bPos > cap(s.b)/4 {
-				// have unread chunks, but also have space at the start of slice, so shift it to the left
+				// at least 1/4 of buffer is empty, so shift data to the left to free space at the end
 				copied := copy(s.b, s.b[s.bPos:])
+				// clear references to copied data
 				for i := copied; i < len(s.b); i++ {
 					s.b[i] = nil
 				}
