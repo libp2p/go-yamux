@@ -31,6 +31,11 @@ type Config struct {
 	// an expectation that things will move along quickly.
 	ConnectionWriteTimeout time.Duration
 
+	// MaxIncomingStreams is maximum number of concurrent incoming streams
+	// that we accept. If the peer tries to open more streams, those will be
+	// reset immediately.
+	MaxIncomingStreams uint32
+
 	// InitialStreamWindowSize is used to control the initial
 	// window size that we allow for a stream.
 	InitialStreamWindowSize uint32
@@ -65,6 +70,7 @@ func DefaultConfig() *Config {
 		EnableKeepAlive:         true,
 		KeepAliveInterval:       30 * time.Second,
 		ConnectionWriteTimeout:  10 * time.Second,
+		MaxIncomingStreams:      1000,
 		InitialStreamWindowSize: initialStreamWindow,
 		MaxStreamWindowSize:     maxStreamWindow,
 		LogOutput:               os.Stderr,
