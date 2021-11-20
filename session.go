@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/libp2p/go-buffer-pool"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 // Session is used to wrap a reliable ordered connection and to
@@ -55,9 +55,10 @@ type Session struct {
 	// streams maps a stream id to a stream, and inflight has an entry
 	// for any outgoing stream that has not yet been established. Both are
 	// protected by streamLock.
-	streams    map[uint32]*Stream
-	inflight   map[uint32]struct{}
-	streamLock sync.Mutex
+	numIncomingStreams uint32
+	streams            map[uint32]*Stream
+	inflight           map[uint32]struct{}
+	streamLock         sync.Mutex
 
 	// synCh acts like a semaphore. It is sized to the AcceptBacklog which
 	// is assumed to be symmetric between the client and server. This allows
@@ -735,6 +736,15 @@ func (s *Session) incomingStream(id uint32) error {
 		return ErrDuplicateStream
 	}
 
+	if s.numIncomingStreams >= s.config.MaxIncomingStreams {
+		// too many active streams at the same time
+		s.logger.Printf("[WARN] yamux: MaxIncomingStreams exceeded, forcing stream reset")
+		delete(s.streams, id)
+		hdr := encode(typeWindowUpdate, flagRST, id, 0)
+		return s.sendMsg(hdr, nil, nil)
+	}
+
+	s.numIncomingStreams++
 	// Register the stream
 	s.streams[id] = stream
 
@@ -744,7 +754,7 @@ func (s *Session) incomingStream(id uint32) error {
 		return nil
 	default:
 		// Backlog exceeded! RST the stream
-		s.logger.Printf("[WARN] yamux: backlog exceeded, forcing connection reset")
+		s.logger.Printf("[WARN] yamux: backlog exceeded, forcing stream reset")
 		delete(s.streams, id)
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
 		return s.sendMsg(hdr, nil, nil)
@@ -763,6 +773,9 @@ func (s *Session) closeStream(id uint32) {
 			s.logger.Printf("[ERR] yamux: SYN tracking out of sync")
 		}
 		delete(s.inflight, id)
+	}
+	if s.client == (id%2 == 0) {
+		s.numIncomingStreams--
 	}
 	delete(s.streams, id)
 	s.streamLock.Unlock()

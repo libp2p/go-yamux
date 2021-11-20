@@ -1732,3 +1732,55 @@ func TestInitialStreamWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestMaxIncomingStreams(t *testing.T) {
+	const maxIncomingStreams = 5
+	conn1, conn2 := testConn()
+	client, err := Client(conn1, DefaultConfig())
+	require.NoError(t, err)
+	defer client.Close()
+
+	conf := DefaultConfig()
+	conf.MaxIncomingStreams = maxIncomingStreams
+	server, err := Server(conn2, conf)
+	require.NoError(t, err)
+	defer server.Close()
+
+	strChan := make(chan *Stream, maxIncomingStreams)
+	go func() {
+		defer close(strChan)
+		for {
+			str, err := server.AcceptStream()
+			if err != nil {
+				return
+			}
+			_, err = str.Write([]byte("foobar"))
+			require.NoError(t, err)
+			strChan <- str
+		}
+	}()
+
+	for i := 0; i < maxIncomingStreams; i++ {
+		str, err := client.OpenStream(context.Background())
+		require.NoError(t, err)
+		_, err = str.Read(make([]byte, 6))
+		require.NoError(t, err)
+		require.NoError(t, str.CloseWrite())
+	}
+	// The server now has maxIncomingStreams incoming streams.
+	// It will now reset the next stream that is opened.
+	str, err := client.OpenStream(context.Background())
+	require.NoError(t, err)
+	str.SetDeadline(time.Now().Add(time.Second))
+	_, err = str.Read([]byte{0})
+	require.EqualError(t, err, "stream reset")
+
+	// Now close one of the streams.
+	// This should then allow the client to open a new stream.
+	require.NoError(t, (<-strChan).Close())
+	str, err = client.OpenStream(context.Background())
+	require.NoError(t, err)
+	str.SetDeadline(time.Now().Add(time.Second))
+	_, err = str.Read([]byte{0})
+	require.NoError(t, err)
+}
