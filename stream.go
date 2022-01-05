@@ -51,7 +51,7 @@ type Stream struct {
 
 // newStream is used to construct a new stream within
 // a given session for an ID
-func newStream(session *Session, id uint32, state streamState) *Stream {
+func newStream(session *Session, id uint32, state streamState, initialWindow uint32) *Stream {
 	s := &Stream{
 		id:            id,
 		session:       session,
@@ -62,7 +62,7 @@ func newStream(session *Session, id uint32, state streamState) *Stream {
 		// Initialize the recvBuf with initialStreamWindow, not config.InitialStreamWindowSize.
 		// The peer isn't allowed to send more data than initialStreamWindow until we've sent
 		// the first window update (which will grant it up to config.InitialStreamWindowSize).
-		recvBuf:      newSegmentedBuffer(initialStreamWindow),
+		recvBuf:      newSegmentedBuffer(initialWindow),
 		recvWindow:   session.config.InitialStreamWindowSize,
 		epochStart:   time.Now(),
 		recvNotifyCh: make(chan struct{}, 1),
@@ -225,8 +225,10 @@ func (s *Stream) sendWindowUpdate() error {
 			recvWindow = min(s.recvWindow*2, s.session.config.MaxStreamWindowSize)
 		}
 		if recvWindow > s.recvWindow {
-			s.recvWindow = recvWindow
-			_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
+			if err := s.session.memoryManager.ReserveMemory(int(delta), 128); err == nil {
+				s.recvWindow = recvWindow
+				_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
+			}
 		}
 	}
 	s.epochStart = now

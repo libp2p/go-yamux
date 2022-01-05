@@ -60,6 +60,12 @@ type Config struct {
 	// MaxMessageSize is the maximum size of a message that we'll send on a
 	// stream. This ensures that a single stream doesn't hog a connection.
 	MaxMessageSize uint32
+
+	// MemoryManager allows management of memory allocations.
+	// Memory is allocated:
+	// 1. When opening / accepting a new stream. This uses the highest priority.
+	// 2. When trying to increase the stream receive window. This uses a lower priority.
+	MemoryManager MemoryManager
 }
 
 // DefaultConfig is used to return a default configuration

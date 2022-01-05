@@ -18,6 +18,21 @@ import (
 	pool "github.com/libp2p/go-buffer-pool"
 )
 
+// The MemoryManager allows management of memory allocations.
+type MemoryManager interface {
+	// ReserveMemory reserves memory / buffer.
+	ReserveMemory(size int, prio uint8) error
+	// ReleaseMemory explicitly releases memory previously reserved with ReserveMemory
+	ReleaseMemory(size int)
+}
+
+type nullMemoryManagerImpl struct{}
+
+func (n nullMemoryManagerImpl) ReserveMemory(size int, prio uint8) error { return nil }
+func (n nullMemoryManagerImpl) ReleaseMemory(size int)                   {}
+
+var nullMemoryManager MemoryManager = &nullMemoryManagerImpl{}
+
 // Session is used to wrap a reliable ordered connection and to
 // multiplex it into multiple streams.
 type Session struct {
@@ -46,6 +61,8 @@ type Session struct {
 
 	// reader is a buffered reader
 	reader io.Reader
+
+	memoryManager MemoryManager
 
 	// pings is used to track inflight pings
 	pingLock   sync.Mutex
@@ -106,21 +123,22 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 		reader = bufio.NewReaderSize(reader, readBuf)
 	}
 	s := &Session{
-		config:     config,
-		client:     client,
-		logger:     log.New(config.LogOutput, "", log.LstdFlags),
-		conn:       conn,
-		reader:     reader,
-		streams:    make(map[uint32]*Stream),
-		inflight:   make(map[uint32]struct{}),
-		synCh:      make(chan struct{}, config.AcceptBacklog),
-		acceptCh:   make(chan *Stream, config.AcceptBacklog),
-		sendCh:     make(chan []byte, 64),
-		pongCh:     make(chan uint32, config.PingBacklog),
-		pingCh:     make(chan uint32),
-		recvDoneCh: make(chan struct{}),
-		sendDoneCh: make(chan struct{}),
-		shutdownCh: make(chan struct{}),
+		config:        config,
+		client:        client,
+		logger:        log.New(config.LogOutput, "", log.LstdFlags),
+		conn:          conn,
+		reader:        reader,
+		streams:       make(map[uint32]*Stream),
+		inflight:      make(map[uint32]struct{}),
+		synCh:         make(chan struct{}, config.AcceptBacklog),
+		acceptCh:      make(chan *Stream, config.AcceptBacklog),
+		sendCh:        make(chan []byte, 64),
+		pongCh:        make(chan uint32, config.PingBacklog),
+		pingCh:        make(chan uint32),
+		recvDoneCh:    make(chan struct{}),
+		sendDoneCh:    make(chan struct{}),
+		shutdownCh:    make(chan struct{}),
+		memoryManager: config.MemoryManager,
 	}
 	if client {
 		s.nextStreamID = 1
@@ -129,6 +147,9 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 	}
 	if config.EnableKeepAlive {
 		s.startKeepalive()
+	}
+	if s.memoryManager == nil {
+		s.memoryManager = nullMemoryManager
 	}
 	go s.recv()
 	go s.send()
@@ -187,6 +208,10 @@ func (s *Session) OpenStream(ctx context.Context) (*Stream, error) {
 		return nil, s.shutdownErr
 	}
 
+	if err := s.memoryManager.ReserveMemory(initialStreamWindow, 255); err != nil {
+		return nil, err
+	}
+
 GET_ID:
 	// Get an ID, and check for stream exhaustion
 	id := atomic.LoadUint32(&s.nextStreamID)
@@ -198,7 +223,7 @@ GET_ID:
 	}
 
 	// Register the stream
-	stream := newStream(s, id, streamInit)
+	stream := newStream(s, id, streamInit, initialStreamWindow)
 	s.streamLock.Lock()
 	s.streams[id] = stream
 	s.inflight[id] = struct{}{}
@@ -477,20 +502,20 @@ func (s *Session) sendLoop() error {
 	// FIXME: https://github.com/libp2p/go-libp2p/issues/644
 	// Write coalescing is disabled for now.
 
-	//writer := pool.Writer{W: s.conn}
+	// writer := pool.Writer{W: s.conn}
 
-	//var writeTimeout *time.Timer
-	//var writeTimeoutCh <-chan time.Time
-	//if s.config.WriteCoalesceDelay > 0 {
+	// var writeTimeout *time.Timer
+	// var writeTimeoutCh <-chan time.Time
+	// if s.config.WriteCoalesceDelay > 0 {
 	//	writeTimeout = time.NewTimer(s.config.WriteCoalesceDelay)
 	//	defer writeTimeout.Stop()
 
 	//	writeTimeoutCh = writeTimeout.C
-	//} else {
+	// } else {
 	//	ch := make(chan time.Time)
 	//	close(ch)
 	//	writeTimeoutCh = ch
-	//}
+	// }
 
 	for {
 		// yield after processing the last message, if we've shutdown.
@@ -526,7 +551,7 @@ func (s *Session) sendLoop() error {
 				copy(buf, hdr[:])
 			case <-s.shutdownCh:
 				return nil
-				//default:
+				// default:
 				//	select {
 				//	case buf = <-s.sendCh:
 				//	case <-s.shutdownCh:
@@ -591,6 +616,7 @@ func (s *Session) recvLoop() error {
 	defer close(s.recvDoneCh)
 	var hdr header
 	for {
+		// fmt.Printf("ReadFull from %#v\n", s.reader)
 		// Read the header
 		if _, err := io.ReadFull(s.reader, hdr[:]); err != nil {
 			if err != io.EOF && !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "reset by peer") {
@@ -733,7 +759,10 @@ func (s *Session) incomingStream(id uint32) error {
 	}
 
 	// Allocate a new stream
-	stream := newStream(s, id, streamSYNReceived)
+	if err := s.memoryManager.ReserveMemory(initialStreamWindow, 255); err != nil {
+		return err
+	}
+	stream := newStream(s, id, streamSYNReceived, initialStreamWindow)
 
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
@@ -744,13 +773,14 @@ func (s *Session) incomingStream(id uint32) error {
 		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
 			s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
 		}
+		s.memoryManager.ReleaseMemory(initialStreamWindow)
 		return ErrDuplicateStream
 	}
 
 	if s.numIncomingStreams >= s.config.MaxIncomingStreams {
 		// too many active streams at the same time
 		s.logger.Printf("[WARN] yamux: MaxIncomingStreams exceeded, forcing stream reset")
-		delete(s.streams, id)
+		s.memoryManager.ReleaseMemory(initialStreamWindow)
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
 		return s.sendMsg(hdr, nil, nil)
 	}
@@ -766,7 +796,7 @@ func (s *Session) incomingStream(id uint32) error {
 	default:
 		// Backlog exceeded! RST the stream
 		s.logger.Printf("[WARN] yamux: backlog exceeded, forcing stream reset")
-		delete(s.streams, id)
+		s.deleteStream(id)
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
 		return s.sendMsg(hdr, nil, nil)
 	}
@@ -788,8 +818,17 @@ func (s *Session) closeStream(id uint32) {
 	if s.client == (id%2 == 0) {
 		s.numIncomingStreams--
 	}
-	delete(s.streams, id)
+	s.deleteStream(id)
 	s.streamLock.Unlock()
+}
+
+func (s *Session) deleteStream(id uint32) {
+	str, ok := s.streams[id]
+	if !ok {
+		return
+	}
+	s.memoryManager.ReleaseMemory(int(str.recvWindow))
+	delete(s.streams, id)
 }
 
 // establishStream is used to mark a stream that was in the
