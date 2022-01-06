@@ -239,6 +239,8 @@ func TestPing(t *testing.T) {
 	defer server.Close()
 
 	clientConn := client.conn.(*pipeConn)
+	time.Sleep(time.Millisecond)
+
 	clientConn.BlockWrites()
 	go func() {
 		time.Sleep(10 * time.Millisecond)
