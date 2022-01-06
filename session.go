@@ -501,11 +501,9 @@ func (s *Session) sendLoop() error {
 		default:
 		}
 
-		// Flushes at least once every 100 microseconds unless we're
-		// constantly writing.
 		var buf []byte
+		// Make sure to send any pings & pongs first so they don't get stuck behind writes.
 		select {
-		case buf = <-s.sendCh:
 		case pingID := <-s.pingCh:
 			buf = pool.Get(headerSize)
 			hdr := encode(typePing, flagSYN, 0, pingID)
@@ -514,31 +512,44 @@ func (s *Session) sendLoop() error {
 			buf = pool.Get(headerSize)
 			hdr := encode(typePing, flagACK, 0, pingID)
 			copy(buf, hdr[:])
-		case <-s.shutdownCh:
-			return nil
-			//default:
-			//	select {
-			//	case buf = <-s.sendCh:
-			//	case <-s.shutdownCh:
-			//		return nil
-			//	case <-writeTimeoutCh:
-			//		if err := writer.Flush(); err != nil {
-			//			if os.IsTimeout(err) {
-			//				err = ErrConnectionWriteTimeout
-			//			}
-			//			return err
-			//		}
+		default:
+			// Then send normal data.
+			select {
+			case buf = <-s.sendCh:
+			case pingID := <-s.pingCh:
+				buf = pool.Get(headerSize)
+				hdr := encode(typePing, flagSYN, 0, pingID)
+				copy(buf, hdr[:])
+			case pingID := <-s.pongCh:
+				buf = pool.Get(headerSize)
+				hdr := encode(typePing, flagACK, 0, pingID)
+				copy(buf, hdr[:])
+			case <-s.shutdownCh:
+				return nil
+				//default:
+				//	select {
+				//	case buf = <-s.sendCh:
+				//	case <-s.shutdownCh:
+				//		return nil
+				//	case <-writeTimeoutCh:
+				//		if err := writer.Flush(); err != nil {
+				//			if os.IsTimeout(err) {
+				//				err = ErrConnectionWriteTimeout
+				//			}
+				//			return err
+				//		}
 
-			//		select {
-			//		case buf = <-s.sendCh:
-			//		case <-s.shutdownCh:
-			//			return nil
-			//		}
+				//		select {
+				//		case buf = <-s.sendCh:
+				//		case <-s.shutdownCh:
+				//			return nil
+				//		}
 
-			//		if writeTimeout != nil {
-			//			writeTimeout.Reset(s.config.WriteCoalesceDelay)
-			//		}
-			//	}
+				//		if writeTimeout != nil {
+				//			writeTimeout.Reset(s.config.WriteCoalesceDelay)
+				//		}
+				//	}
+			}
 		}
 
 		if err := extendWriteDeadline(); err != nil {
