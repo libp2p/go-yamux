@@ -115,7 +115,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 		inflight:   make(map[uint32]struct{}),
 		synCh:      make(chan struct{}, config.AcceptBacklog),
 		acceptCh:   make(chan *Stream, config.AcceptBacklog),
-		sendCh:     make(chan []byte, 64),
+		sendCh:     make(chan []byte, 256),
 		pongCh:     make(chan uint32, config.PingBacklog),
 		pingCh:     make(chan uint32),
 		recvDoneCh: make(chan struct{}),
