@@ -301,6 +301,7 @@ func (s *Session) measureRTT() {
 		return
 	}
 	atomic.StoreInt64(&s.rtt, rtt.Nanoseconds())
+	time.AfterFunc(10*time.Second, s.measureRTT)
 }
 
 // 0 if we don't yet have a measurement
