@@ -1,6 +1,7 @@
 package yamux
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -159,6 +160,7 @@ START:
 
 	// If there is no data available, block
 	window := atomic.LoadUint32(&s.sendWindow)
+	fmt.Printf("send windows size: %d\n", window)
 	if window == 0 {
 		select {
 		case <-s.sendNotifyCh:
@@ -217,7 +219,9 @@ func (s *Stream) sendWindowUpdate() error {
 	}
 
 	now := time.Now()
-	if rtt := s.session.getRTT(); flags == 0 && rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
+	rtt := s.session.getRTT()
+	fmt.Printf("rtt: %d, flags: %d, epochTime: %d\n", rtt, flags, now.Sub(s.epochStart))
+	if flags == 0 && rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
 		var recvWindow uint32
 		if s.recvWindow > math.MaxUint32/2 {
 			recvWindow = min(math.MaxUint32, s.session.config.MaxStreamWindowSize)
@@ -229,6 +233,7 @@ func (s *Stream) sendWindowUpdate() error {
 			_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
 		}
 	}
+	fmt.Printf("receive windows size: %d\n", s.recvWindow)
 	s.epochStart = now
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
 	return s.session.sendMsg(hdr, nil, nil)
