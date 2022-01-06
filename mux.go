@@ -25,6 +25,9 @@ type Config struct {
 	// KeepAliveInterval is how often to perform the keep alive
 	KeepAliveInterval time.Duration
 
+	// MeasureRTTInterval is how often to re-measure the round trip time
+	MeasureRTTInterval time.Duration
+
 	// ConnectionWriteTimeout is meant to be a "safety valve" timeout after
 	// we which will suspect a problem with the underlying connection and
 	// close it. This is only applied to writes, where's there's generally
@@ -69,6 +72,7 @@ func DefaultConfig() *Config {
 		PingBacklog:             32,
 		EnableKeepAlive:         true,
 		KeepAliveInterval:       30 * time.Second,
+		MeasureRTTInterval:      30 * time.Second,
 		ConnectionWriteTimeout:  10 * time.Second,
 		MaxIncomingStreams:      1000,
 		InitialStreamWindowSize: initialStreamWindow,
@@ -88,6 +92,10 @@ func VerifyConfig(config *Config) error {
 	if config.KeepAliveInterval == 0 {
 		return fmt.Errorf("keep-alive interval must be positive")
 	}
+	if config.MeasureRTTInterval == 0 {
+		return fmt.Errorf("measure-rtt interval must be positive")
+	}
+
 	if config.InitialStreamWindowSize < initialStreamWindow {
 		return errors.New("InitialStreamWindowSize must be larger or equal 256 kB")
 	}

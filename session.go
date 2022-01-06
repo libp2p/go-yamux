@@ -118,6 +118,11 @@ type Session struct {
 	keepaliveLock   sync.Mutex
 	keepaliveTimer  *time.Timer
 	keepaliveActive bool
+
+	// measureRTTTimer is a periodic timer for measuring round trip time.
+	measureRTTLock   sync.Mutex
+	measureRTTTimer  *time.Timer
+	measureRTTActive bool
 }
 
 // newSession is used to construct a new session
@@ -157,7 +162,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int, memoryM
 	}
 	go s.recv()
 	go s.send()
-	go s.measureRTT()
+	go s.startMeasureRTT()
 	return s
 }
 
@@ -289,6 +294,7 @@ func (s *Session) Close() error {
 	close(s.shutdownCh)
 	s.conn.Close()
 	s.stopKeepalive()
+	s.stopMeasureRTT()
 	<-s.recvDoneCh
 	<-s.sendDoneCh
 
@@ -336,6 +342,31 @@ func (s *Session) measureRTT() {
 		return
 	}
 	atomic.StoreInt64(&s.rtt, rtt.Nanoseconds())
+}
+
+func (s *Session) startMeasureRTT() {
+	s.measureRTT()
+	s.measureRTTLock.Lock()
+	defer s.measureRTTLock.Unlock()
+	s.measureRTTTimer = time.AfterFunc(s.config.MeasureRTTInterval, func() {
+		s.measureRTTLock.Lock()
+		if s.measureRTTTimer == nil || s.measureRTTActive {
+			// measureRTTs have been stopped or a measureRTT is active.
+			s.measureRTTLock.Unlock()
+			return
+		}
+		s.measureRTTActive = true
+		s.measureRTTLock.Unlock()
+
+		s.measureRTT()
+
+		s.measureRTTLock.Lock()
+		s.measureRTTActive = false
+		if s.measureRTTTimer != nil {
+			s.measureRTTTimer.Reset(s.config.MeasureRTTInterval)
+		}
+		s.measureRTTLock.Unlock()
+	})
 }
 
 // 0 if we don't yet have a measurement
@@ -416,8 +447,7 @@ func (s *Session) startKeepalive() {
 		s.keepaliveActive = true
 		s.keepaliveLock.Unlock()
 
-		rtt, err := s.Ping()
-		atomic.StoreInt64(&s.rtt, rtt.Nanoseconds())
+		_, err := s.Ping()
 
 		s.keepaliveLock.Lock()
 		s.keepaliveActive = false
@@ -443,6 +473,15 @@ func (s *Session) stopKeepalive() {
 	}
 }
 
+// stopMeasureRTT stops the measureRTT process.
+func (s *Session) stopMeasureRTT() {
+	s.measureRTTLock.Lock()
+	defer s.measureRTTLock.Unlock()
+	if s.measureRTTTimer != nil {
+		s.measureRTTTimer.Stop()
+		s.measureRTTTimer = nil
+	}
+}
 func (s *Session) extendKeepalive() {
 	s.keepaliveLock.Lock()
 	if s.keepaliveTimer != nil && !s.keepaliveActive {
