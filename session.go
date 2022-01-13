@@ -19,6 +19,9 @@ import (
 )
 
 // The MemoryManager allows management of memory allocations.
+// Memory is allocated:
+// 1. When opening / accepting a new stream. This uses the highest priority.
+// 2. When trying to increase the stream receive window. This uses a lower priority.
 type MemoryManager interface {
 	// ReserveMemory reserves memory / buffer.
 	ReserveMemory(size int, prio uint8) error
@@ -117,10 +120,13 @@ type Session struct {
 }
 
 // newSession is used to construct a new session
-func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Session {
+func newSession(config *Config, conn net.Conn, client bool, readBuf int, memoryManager MemoryManager) *Session {
 	var reader io.Reader = conn
 	if readBuf > 0 {
 		reader = bufio.NewReaderSize(reader, readBuf)
+	}
+	if memoryManager == nil {
+		memoryManager = nullMemoryManager
 	}
 	s := &Session{
 		config:        config,
@@ -138,7 +144,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 		recvDoneCh:    make(chan struct{}),
 		sendDoneCh:    make(chan struct{}),
 		shutdownCh:    make(chan struct{}),
-		memoryManager: config.MemoryManager,
+		memoryManager: memoryManager,
 	}
 	if client {
 		s.nextStreamID = 1
@@ -147,9 +153,6 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int) *Sessio
 	}
 	if config.EnableKeepAlive {
 		s.startKeepalive()
-	}
-	if s.memoryManager == nil {
-		s.memoryManager = nullMemoryManager
 	}
 	go s.recv()
 	go s.send()

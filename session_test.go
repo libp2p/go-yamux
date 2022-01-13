@@ -117,16 +117,16 @@ func testClientServer() (*Session, *Session) {
 
 func testClientServerConfig(conf *Config) (*Session, *Session) {
 	conn1, conn2 := testConn()
-	client, _ := Client(conn1, conf)
-	server, _ := Server(conn2, conf)
+	client, _ := Client(conn1, conf, nil)
+	server, _ := Server(conn2, conf, nil)
 	return client, server
 }
 
 func TestClientClient(t *testing.T) {
 	conf := testConf()
 	conn1, conn2 := testConn()
-	client1, _ := Client(conn1, conf)
-	client2, _ := Client(conn2, conf)
+	client1, _ := Client(conn1, conf, nil)
+	client2, _ := Client(conn2, conf, nil)
 	defer client1.Close()
 	defer client2.Close()
 
@@ -148,8 +148,8 @@ func TestClientClient(t *testing.T) {
 func TestServerServer(t *testing.T) {
 	conf := testConf()
 	conn1, conn2 := testConn()
-	server1, _ := Server(conn1, conf)
-	server2, _ := Server(conn2, conf)
+	server1, _ := Server(conn1, conf, nil)
+	server2, _ := Server(conn2, conf, nil)
 	defer server1.Close()
 	defer server2.Close()
 
@@ -1028,14 +1028,14 @@ func TestKeepAlive_Timeout(t *testing.T) {
 	clientConf := testConf()
 	clientConf.ConnectionWriteTimeout = time.Hour // We're testing keep alives, not connection writes
 	clientConf.EnableKeepAlive = false            // Just test one direction, so it's deterministic who hangs up on whom
-	client, _ := Client(conn1, clientConf)
+	client, _ := Client(conn1, clientConf, nil)
 	defer client.Close()
 
 	serverLogs := new(logCapture)
 	serverConf := testConf()
 	serverConf.LogOutput = serverLogs
 
-	server, _ := Server(conn2, serverConf)
+	server, _ := Server(conn2, serverConf, nil)
 	defer server.Close()
 
 	errCh := make(chan error, 1)
@@ -1589,7 +1589,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream2.Reset() //nolint
+	defer stream2.Reset() // nolint
 
 	// wait for the server to accept the streams.
 	<-waitCh
@@ -1701,8 +1701,8 @@ func TestInitialStreamWindow(t *testing.T) {
 		sconf.InitialStreamWindowSize = randomUint32(initialStreamWindow, maxWindow)
 
 		conn1, conn2 := testConn()
-		client, _ := Client(conn1, cconf)
-		server, _ := Server(conn2, sconf)
+		client, _ := Client(conn1, cconf, nil)
+		server, _ := Server(conn2, sconf, nil)
 
 		errChan := make(chan error, 1)
 		go func() {
@@ -1736,13 +1736,13 @@ func TestInitialStreamWindow(t *testing.T) {
 func TestMaxIncomingStreams(t *testing.T) {
 	const maxIncomingStreams = 5
 	conn1, conn2 := testConn()
-	client, err := Client(conn1, DefaultConfig())
+	client, err := Client(conn1, DefaultConfig(), nil)
 	require.NoError(t, err)
 	defer client.Close()
 
 	conf := DefaultConfig()
 	conf.MaxIncomingStreams = maxIncomingStreams
-	server, err := Server(conn2, conf)
+	server, err := Server(conn2, conf, nil)
 	require.NoError(t, err)
 	defer server.Close()
 
