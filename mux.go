@@ -109,19 +109,19 @@ func VerifyConfig(config *Config) error {
 // Server is used to initialize a new server-side connection.
 // There must be at most one server-side connection. If a nil config is
 // provided, the DefaultConfiguration will be used.
-func Server(conn net.Conn, config *Config) (*Session, error) {
+func Server(conn net.Conn, config *Config, mm MemoryManager) (*Session, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
 	if err := VerifyConfig(config); err != nil {
 		return nil, err
 	}
-	return newSession(config, conn, false, config.ReadBufSize), nil
+	return newSession(config, conn, false, config.ReadBufSize, mm), nil
 }
 
 // Client is used to initialize a new client-side connection.
 // There must be at most one client-side connection.
-func Client(conn net.Conn, config *Config) (*Session, error) {
+func Client(conn net.Conn, config *Config, mm MemoryManager) (*Session, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
@@ -129,5 +129,5 @@ func Client(conn net.Conn, config *Config) (*Session, error) {
 	if err := VerifyConfig(config); err != nil {
 		return nil, err
 	}
-	return newSession(config, conn, true, config.ReadBufSize), nil
+	return newSession(config, conn, true, config.ReadBufSize, mm), nil
 }
