@@ -1,4 +1,4 @@
-module github.com/libp2p/go-yamux/v2
+module github.com/libp2p/go-yamux/v3
 
 go 1.16
 
