@@ -225,12 +225,14 @@ func (s *Stream) sendWindowUpdate() error {
 			recvWindow = min(s.recvWindow*2, s.session.config.MaxStreamWindowSize)
 		}
 		if recvWindow > s.recvWindow {
-			if err := s.session.memoryManager.ReserveMemory(int(delta), 128); err == nil {
+			grow := recvWindow - s.recvWindow
+			if err := s.session.memoryManager.ReserveMemory(int(grow), 128); err == nil {
 				s.recvWindow = recvWindow
 				_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
 			}
 		}
 	}
+
 	s.epochStart = now
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
 	return s.session.sendMsg(hdr, nil, nil)
