@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -488,7 +489,14 @@ func (s *Session) send() {
 	}
 }
 
-func (s *Session) sendLoop() error {
+func (s *Session) sendLoop() (err error) {
+	defer func() {
+		if rerr := recover(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "caught panic: %s\n%s\n", rerr, debug.Stack())
+			err = fmt.Errorf("panic in yamux send loop: %s", rerr)
+		}
+	}()
+
 	defer close(s.sendDoneCh)
 
 	// Extend the write deadline if we've passed the halfway point. This can
@@ -620,7 +628,13 @@ var (
 )
 
 // recvLoop continues to receive data until a fatal error is encountered
-func (s *Session) recvLoop() error {
+func (s *Session) recvLoop() (err error) {
+	defer func() {
+		if rerr := recover(); rerr != nil {
+			fmt.Fprintf(os.Stderr, "caught panic: %s\n%s\n", rerr, debug.Stack())
+			err = fmt.Errorf("panic in yamux receive loop: %s", rerr)
+		}
+	}()
 	defer close(s.recvDoneCh)
 	var hdr header
 	for {
