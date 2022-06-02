@@ -295,9 +295,10 @@ func (s *Session) Close() error {
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
 	var memory int
-	for _, stream := range s.streams {
+	for id, stream := range s.streams {
 		memory += stream.memory
 		stream.forceClose()
+		delete(s.streams, id)
 	}
 	if memory > 0 {
 		s.memoryManager.ReleaseMemory(memory)
