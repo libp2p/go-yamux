@@ -40,30 +40,28 @@ func min(values ...uint32) uint32 {
 
 // The segmented buffer looks like:
 //
-//      |     data      | empty space       |
-//       < window (10)                     >
-//       < len (5)     > < cap (5)         >
+//	|     data      | empty space       |
+//	 < window (10)                     >
+//	 < len (5)     > < cap (5)         >
 //
 // As data is read, the buffer gets updated like so:
 //
-//         |     data   | empty space       |
-//          < window (8)                   >
-//          < len (3)  > < cap (5)         >
+//	|     data   | empty space       |
+//	 < window (8)                   >
+//	 < len (3)  > < cap (5)         >
 //
 // It can then grow as follows (given a "max" of 10):
 //
-//
-//         |     data   | empty space          |
-//          < window (10)                     >
-//          < len (3)  > < cap (7)            >
+//	|     data   | empty space          |
+//	 < window (10)                     >
+//	 < len (3)  > < cap (7)            >
 //
 // Data can then be written into the empty space, expanding len,
 // and shrinking cap:
 //
-//         |     data       | empty space      |
-//          < window (10)                     >
-//          < len (5)      > < cap (5)        >
-//
+//	|     data       | empty space      |
+//	 < window (10)                     >
+//	 < len (5)      > < cap (5)        >
 type segmentedBuffer struct {
 	cap uint32
 	len uint32

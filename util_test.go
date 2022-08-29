@@ -3,7 +3,6 @@ package yamux
 import (
 	"bytes"
 	"io"
-	"io/ioutil"
 	"testing"
 )
 
@@ -93,7 +92,7 @@ func TestSegmentedBuffer(t *testing.T) {
 	if grew, amount := buf.GrowTo(100, false); grew || amount != 0 {
 		t.Fatal("should not grow when data hasn't been read")
 	}
-	read, err := io.CopyN(ioutil.Discard, &buf, 50)
+	read, err := io.CopyN(io.Discard, &buf, 50)
 	if err != nil {
 		t.Fatal(err)
 	}

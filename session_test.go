@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"reflect"
@@ -629,7 +628,7 @@ func TestSendData_Large(t *testing.T) {
 func TestGoAway(t *testing.T) {
 	// This test is noisy.
 	conf := testConf()
-	conf.LogOutput = ioutil.Discard
+	conf.LogOutput = io.Discard
 
 	client, server := testClientServerConfig(conf)
 	defer client.Close()
@@ -1352,7 +1351,7 @@ func TestWindowOverflow(t *testing.T) {
 			msg := make([]byte, client.config.MaxStreamWindowSize*2)
 			hdr2 := encode(typeData, 0, i, uint32(len(msg)))
 			_ = client.sendMsg(hdr2, msg, nil)
-			_, err = ioutil.ReadAll(s)
+			_, err = io.ReadAll(s)
 			if err == nil {
 				t.Fatal("expected to read no data")
 			}
@@ -1483,7 +1482,7 @@ func TestStreamHalfClose2(t *testing.T) {
 	stream.CloseWrite()
 	wait <- struct{}{}
 
-	buf, err := ioutil.ReadAll(stream)
+	buf, err := io.ReadAll(stream)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1507,7 +1506,7 @@ func TestStreamResetRead(t *testing.T) {
 			t.Error(err)
 		}
 
-		_, err = ioutil.ReadAll(stream)
+		_, err = io.ReadAll(stream)
 		if err == nil {
 			t.Errorf("expected reset")
 		}
@@ -1521,7 +1520,7 @@ func TestStreamResetRead(t *testing.T) {
 	go func() {
 		defer wc.Done()
 
-		_, err := ioutil.ReadAll(stream)
+		_, err := io.ReadAll(stream)
 		if err == nil {
 			t.Errorf("expected reset")
 		}
@@ -1572,7 +1571,7 @@ func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if b, err := ioutil.ReadAll(stream2); len(b) != 0 || err != ErrTimeout {
+		if b, err := io.ReadAll(stream2); len(b) != 0 || err != ErrTimeout {
 			t.Errorf("writes from the client should've expired; got: %v, bytes: %v", err, b)
 			return
 		}
@@ -1723,7 +1722,7 @@ func TestInitialStreamWindow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		data, err := ioutil.ReadAll(str)
+		data, err := io.ReadAll(str)
 		if err != nil {
 			t.Fatal(err)
 		}
