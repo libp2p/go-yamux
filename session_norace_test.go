@@ -1,5 +1,4 @@
 //go:build !race
-// +build !race
 
 package yamux
 
@@ -7,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
 	"sync"
 	"testing"
 	"time"
@@ -81,7 +79,7 @@ func TestSendData_VeryLarge(t *testing.T) {
 				return
 			}
 
-			recv, err := io.Copy(ioutil.Discard, stream)
+			recv, err := io.Copy(io.Discard, stream)
 			if err != nil {
 				t.Errorf("err: %v", err)
 				return

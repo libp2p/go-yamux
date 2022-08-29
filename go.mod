@@ -1,6 +1,6 @@
 module github.com/libp2p/go-yamux/v3
 
-go 1.17
+go 1.18
 
 require (
 	github.com/libp2p/go-buffer-pool v0.0.2
