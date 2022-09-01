@@ -29,6 +29,60 @@ type MemoryManager interface {
 	ReleaseMemory(size int)
 }
 
+// trackingMemoryManager wraps MemoryManager and keeps track of how much memory was allocated.
+type trackingMemoryManager interface {
+	MemoryManager
+
+	// ReleaseAll releases all memory that was allocated.
+	ReleaseAll()
+}
+
+type trackingMemoryManagerImpl struct {
+	mm MemoryManager
+
+	// following fields are protected by lock
+	lock      sync.Mutex
+	stopped   bool
+	allocated int
+}
+
+func (t *trackingMemoryManagerImpl) ReserveMemory(size int, prio uint8) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.stopped {
+		return fmt.Errorf("tracking memory manager is stopped")
+	}
+
+	t.allocated += size
+	return t.mm.ReserveMemory(size, prio)
+}
+
+func (t *trackingMemoryManagerImpl) ReleaseMemory(size int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.stopped {
+		return
+	}
+
+	t.allocated -= size
+	t.mm.ReleaseMemory(size)
+}
+
+func (t *trackingMemoryManagerImpl) ReleaseAll() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.stopped {
+		return
+	}
+
+	t.mm.ReleaseMemory(t.allocated)
+	t.stopped = true
+	t.allocated = 0
+}
+
 type nullMemoryManagerImpl struct{}
 
 func (n nullMemoryManagerImpl) ReserveMemory(size int, prio uint8) error { return nil }
@@ -65,7 +119,7 @@ type Session struct {
 	// reader is a buffered reader
 	reader io.Reader
 
-	memoryManager MemoryManager
+	memoryManager trackingMemoryManager
 
 	// pings is used to track inflight pings
 	pingLock   sync.Mutex
@@ -144,7 +198,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int, memoryM
 		recvDoneCh:    make(chan struct{}),
 		sendDoneCh:    make(chan struct{}),
 		shutdownCh:    make(chan struct{}),
-		memoryManager: memoryManager,
+		memoryManager: &trackingMemoryManagerImpl{mm: memoryManager},
 	}
 	if client {
 		s.nextStreamID = 1
@@ -293,15 +347,12 @@ func (s *Session) Close() error {
 
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
-	var memory int
 	for id, stream := range s.streams {
-		memory += stream.memory
 		stream.forceClose()
 		delete(s.streams, id)
 	}
-	if memory > 0 {
-		s.memoryManager.ReleaseMemory(memory)
-	}
+	s.memoryManager.ReleaseAll()
+
 	return nil
 }
 

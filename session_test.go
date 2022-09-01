@@ -1783,3 +1783,30 @@ func TestMaxIncomingStreams(t *testing.T) {
 	_, err = str.Read([]byte{0})
 	require.NoError(t, err)
 }
+
+func TestTrackingMemoryManager(t *testing.T) {
+	mm := &trackingMemoryManagerImpl{mm: &nullMemoryManagerImpl{}}
+	err := mm.ReserveMemory(10, 128)
+	require.NoError(t, err)
+	require.Equal(t, int(10), mm.allocated)
+	mm.ReleaseMemory(5)
+	require.Equal(t, int(5), mm.allocated)
+
+	require.False(t, mm.stopped)
+	mm.ReleaseAll()
+	require.Equal(t, int(0), mm.allocated)
+	require.True(t, mm.stopped)
+
+	// test that we can't allocate more after we've released all memory
+	err2 := mm.ReserveMemory(10, 128)
+	require.Error(t, err2)
+	require.Contains(t, err2.Error(), "tracking memory manager is stopped")
+	require.Equal(t, int(0), mm.allocated)
+
+	// test that release is also a no-op
+	mm.ReleaseMemory(5)
+	require.Equal(t, int(0), mm.allocated)
+
+	// test that releasing all multiple times is a no-op
+	mm.ReleaseAll()
+}
