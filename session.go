@@ -347,10 +347,10 @@ func (s *Session) Close() error {
 
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
-	for id, stream := range s.streams {
+	for _, stream := range s.streams {
 		stream.forceClose()
-		delete(s.streams, id)
 	}
+	s.streams = make(map[uint32]*Stream)
 	s.memoryManager.ReleaseAll()
 
 	return nil
