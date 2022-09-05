@@ -22,19 +22,25 @@ import (
 // Memory is allocated:
 // 1. When opening / accepting a new stream. This uses the highest priority.
 // 2. When trying to increase the stream receive window. This uses a lower priority.
+// This is a subset of the libp2p's resource manager ResourceScopeSpan interface.
 type MemoryManager interface {
 	// ReserveMemory reserves memory / buffer.
 	ReserveMemory(size int, prio uint8) error
-	// ReleaseMemory explicitly releases memory previously reserved with ReserveMemory
-	ReleaseMemory(size int)
+
+	// BeginSpan creates a new span scope rooted at this scope
+	BeginSpan() (MemoryManager, error)
+
+	// Done ends the span and releases associated resources.
+	Done()
 }
 
 type nullMemoryManagerImpl struct{}
 
 func (n nullMemoryManagerImpl) ReserveMemory(size int, prio uint8) error { return nil }
-func (n nullMemoryManagerImpl) ReleaseMemory(size int)                   {}
+func (n nullMemoryManagerImpl) BeginSpan() (MemoryManager, error)        { return n, nil }
+func (n nullMemoryManagerImpl) Done()                                    {}
 
-var nullMemoryManager MemoryManager = &nullMemoryManagerImpl{}
+var nullMemoryManager = &nullMemoryManagerImpl{}
 
 // Session is used to wrap a reliable ordered connection and to
 // multiplex it into multiple streams.
@@ -211,7 +217,11 @@ func (s *Session) OpenStream(ctx context.Context) (*Stream, error) {
 		return nil, s.shutdownErr
 	}
 
-	if err := s.memoryManager.ReserveMemory(initialStreamWindow, 255); err != nil {
+	span, err := s.memoryManager.BeginSpan()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource scope span: %w", err)
+	}
+	if err := span.ReserveMemory(initialStreamWindow, 255); err != nil {
 		return nil, err
 	}
 
@@ -219,6 +229,7 @@ GET_ID:
 	// Get an ID, and check for stream exhaustion
 	id := atomic.LoadUint32(&s.nextStreamID)
 	if id >= math.MaxUint32-1 {
+		span.Done()
 		return nil, ErrStreamsExhausted
 	}
 	if !atomic.CompareAndSwapUint32(&s.nextStreamID, id, id+2) {
@@ -226,7 +237,7 @@ GET_ID:
 	}
 
 	// Register the stream
-	stream := newStream(s, id, streamInit, initialStreamWindow)
+	stream := newStream(s, id, streamInit, initialStreamWindow, span)
 	s.streamLock.Lock()
 	s.streams[id] = stream
 	s.inflight[id] = struct{}{}
@@ -234,6 +245,7 @@ GET_ID:
 
 	// Send the window update to create
 	if err := stream.sendWindowUpdate(); err != nil {
+		defer span.Done()
 		select {
 		case <-s.synCh:
 		default:
@@ -293,15 +305,11 @@ func (s *Session) Close() error {
 
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
-	var memory int
 	for id, stream := range s.streams {
-		memory += stream.memory
 		stream.forceClose()
 		delete(s.streams, id)
 	}
-	if memory > 0 {
-		s.memoryManager.ReleaseMemory(memory)
-	}
+	s.memoryManager.Done()
 	return nil
 }
 
@@ -784,7 +792,11 @@ func (s *Session) incomingStream(id uint32) error {
 	if err := s.memoryManager.ReserveMemory(initialStreamWindow, 255); err != nil {
 		return err
 	}
-	stream := newStream(s, id, streamSYNReceived, initialStreamWindow)
+	span, err := s.memoryManager.BeginSpan()
+	if err != nil {
+		return fmt.Errorf("failed to create resource span: %w", err)
+	}
+	stream := newStream(s, id, streamSYNReceived, initialStreamWindow, span)
 
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
@@ -795,14 +807,14 @@ func (s *Session) incomingStream(id uint32) error {
 		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
 			s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
 		}
-		s.memoryManager.ReleaseMemory(stream.memory)
+		span.Done()
 		return ErrDuplicateStream
 	}
 
 	if s.numIncomingStreams >= s.config.MaxIncomingStreams {
 		// too many active streams at the same time
 		s.logger.Printf("[WARN] yamux: MaxIncomingStreams exceeded, forcing stream reset")
-		s.memoryManager.ReleaseMemory(stream.memory)
+		defer span.Done()
 		hdr := encode(typeWindowUpdate, flagRST, id, 0)
 		return s.sendMsg(hdr, nil, nil)
 	}
@@ -855,7 +867,7 @@ func (s *Session) deleteStream(id uint32) {
 			s.numIncomingStreams--
 		}
 	}
-	s.memoryManager.ReleaseMemory(str.memory)
+	str.memorySpan.Done()
 	delete(s.streams, id)
 }
 
