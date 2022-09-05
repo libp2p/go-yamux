@@ -118,11 +118,6 @@ type Session struct {
 	keepaliveLock   sync.Mutex
 	keepaliveTimer  *time.Timer
 	keepaliveActive bool
-
-	// measureRTTTimer is a periodic timer for measuring round trip time.
-	measureRTTLock   sync.Mutex
-	measureRTTTimer  *time.Timer
-	measureRTTActive bool
 }
 
 // newSession is used to construct a new session
@@ -294,7 +289,6 @@ func (s *Session) Close() error {
 	close(s.shutdownCh)
 	s.conn.Close()
 	s.stopKeepalive()
-	s.stopMeasureRTT()
 	<-s.recvDoneCh
 	<-s.sendDoneCh
 
@@ -346,27 +340,16 @@ func (s *Session) measureRTT() {
 
 func (s *Session) startMeasureRTT() {
 	s.measureRTT()
-	s.measureRTTLock.Lock()
-	defer s.measureRTTLock.Unlock()
-	s.measureRTTTimer = time.AfterFunc(s.config.MeasureRTTInterval, func() {
-		s.measureRTTLock.Lock()
-		if s.measureRTTTimer == nil || s.measureRTTActive {
-			// measureRTTs have been stopped or a measureRTT is active.
-			s.measureRTTLock.Unlock()
+	t := time.NewTicker(s.config.MeasureRTTInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.CloseChan():
 			return
+		case <-t.C:
+			s.measureRTT()
 		}
-		s.measureRTTActive = true
-		s.measureRTTLock.Unlock()
-
-		s.measureRTT()
-
-		s.measureRTTLock.Lock()
-		s.measureRTTActive = false
-		if s.measureRTTTimer != nil {
-			s.measureRTTTimer.Reset(s.config.MeasureRTTInterval)
-		}
-		s.measureRTTLock.Unlock()
-	})
+	}
 }
 
 // 0 if we don't yet have a measurement
@@ -473,15 +456,6 @@ func (s *Session) stopKeepalive() {
 	}
 }
 
-// stopMeasureRTT stops the measureRTT process.
-func (s *Session) stopMeasureRTT() {
-	s.measureRTTLock.Lock()
-	defer s.measureRTTLock.Unlock()
-	if s.measureRTTTimer != nil {
-		s.measureRTTTimer.Stop()
-		s.measureRTTTimer = nil
-	}
-}
 func (s *Session) extendKeepalive() {
 	s.keepaliveLock.Lock()
 	if s.keepaliveTimer != nil && !s.keepaliveActive {
