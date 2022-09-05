@@ -335,7 +335,11 @@ func (s *Session) measureRTT() {
 	if err != nil {
 		return
 	}
-	atomic.StoreInt64(&s.rtt, rtt.Nanoseconds())
+	if !atomic.CompareAndSwapInt64(&s.rtt, 0, rtt.Nanoseconds()) {
+		prev := atomic.LoadInt64(&s.rtt)
+		smoothedRTT := prev/2 + rtt.Nanoseconds()/2
+		atomic.StoreInt64(&s.rtt, smoothedRTT)
+	}
 }
 
 func (s *Session) startMeasureRTT() {
