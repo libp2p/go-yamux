@@ -31,7 +31,7 @@ const (
 type Stream struct {
 	sendWindow uint32
 
-	memory int
+	memorySpan MemoryManager
 
 	id      uint32
 	session *Session
@@ -53,15 +53,15 @@ type Stream struct {
 
 // newStream is used to construct a new stream within a given session for an ID.
 // It assumes that a memory allocation has been obtained for the initialWindow.
-func newStream(session *Session, id uint32, state streamState, initialWindow uint32) *Stream {
+func newStream(session *Session, id uint32, state streamState, initialWindow uint32, memorySpan MemoryManager) *Stream {
 	s := &Stream{
 		id:            id,
 		session:       session,
 		state:         state,
 		sendWindow:    initialStreamWindow,
-		memory:        int(initialWindow),
 		readDeadline:  makePipeDeadline(),
 		writeDeadline: makePipeDeadline(),
+		memorySpan:    memorySpan,
 		// Initialize the recvBuf with initialStreamWindow, not config.InitialStreamWindowSize.
 		// The peer isn't allowed to send more data than initialStreamWindow until we've sent
 		// the first window update (which will grant it up to config.InitialStreamWindowSize).
@@ -229,9 +229,8 @@ func (s *Stream) sendWindowUpdate() error {
 		}
 		if recvWindow > s.recvWindow {
 			grow := recvWindow - s.recvWindow
-			if err := s.session.memoryManager.ReserveMemory(int(grow), 128); err == nil {
+			if err := s.memorySpan.ReserveMemory(int(grow), 128); err == nil {
 				s.recvWindow = recvWindow
-				s.memory += int(grow)
 				_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
 			}
 		}
