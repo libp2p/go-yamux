@@ -384,22 +384,24 @@ func (s *Stream) cleanup() {
 // based on set flags, if any. Lock must be held
 func (s *Stream) processFlags(flags uint16) {
 	// Close the stream without holding the state lock
-	closeStream := false
+	var closeStream bool
 	defer func() {
 		if closeStream {
 			s.cleanup()
 		}
 	}()
 
-	s.stateLock.Lock()
-	defer s.stateLock.Unlock()
 	if flags&flagACK == flagACK {
+		s.stateLock.Lock()
 		if s.state == streamSYNSent {
 			s.state = streamEstablished
 		}
+		s.stateLock.Unlock()
 		s.session.establishStream(s.id)
 	}
 	if flags&flagFIN == flagFIN {
+		var notify bool
+		s.stateLock.Lock()
 		if s.readState == halfOpen {
 			s.readState = halfClosed
 			if s.writeState != halfOpen {
@@ -407,10 +409,15 @@ func (s *Stream) processFlags(flags uint16) {
 				closeStream = true
 				s.state = streamFinished
 			}
+			notify = true
+		}
+		s.stateLock.Unlock()
+		if notify {
 			s.notifyWaiting()
 		}
 	}
 	if flags&flagRST == flagRST {
+		s.stateLock.Lock()
 		if s.readState == halfOpen {
 			s.readState = halfReset
 		}
@@ -418,6 +425,7 @@ func (s *Stream) processFlags(flags uint16) {
 			s.writeState = halfReset
 		}
 		s.state = streamFinished
+		s.stateLock.Unlock()
 		closeStream = true
 		s.notifyWaiting()
 	}
