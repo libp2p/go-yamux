@@ -161,7 +161,7 @@ func newSession(config *Config, conn net.Conn, client bool, readBuf int, newMemo
 	}
 	go s.recv()
 	go s.send()
-	go s.measureRTT()
+	go s.startMeasureRTT()
 	return s
 }
 
@@ -341,7 +341,25 @@ func (s *Session) measureRTT() {
 	if err != nil {
 		return
 	}
-	atomic.StoreInt64(&s.rtt, rtt.Nanoseconds())
+	if !atomic.CompareAndSwapInt64(&s.rtt, 0, rtt.Nanoseconds()) {
+		prev := atomic.LoadInt64(&s.rtt)
+		smoothedRTT := prev/2 + rtt.Nanoseconds()/2
+		atomic.StoreInt64(&s.rtt, smoothedRTT)
+	}
+}
+
+func (s *Session) startMeasureRTT() {
+	s.measureRTT()
+	t := time.NewTicker(s.config.MeasureRTTInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.CloseChan():
+			return
+		case <-t.C:
+			s.measureRTT()
+		}
+	}
 }
 
 // 0 if we don't yet have a measurement
