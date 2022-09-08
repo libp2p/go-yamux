@@ -1,4 +1,4 @@
-module github.com/libp2p/go-yamux/v3
+module github.com/libp2p/go-yamux/v4
 
 go 1.18
 
