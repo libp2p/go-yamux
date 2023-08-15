@@ -1693,7 +1693,7 @@ func TestInitialStreamWindow(t *testing.T) {
 			maxWindow    = 5 * initialStreamWindow
 			transferSize = 10 * maxWindow
 		)
-		r := rand.NewRand(rand.NewSource(time.Now().UnixNano()))
+		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randomUint32 := func(min, max uint32) uint32 { return uint32(r.Int63n(int64(max-min))) + min }
 
 		cconf := DefaultConfig()
