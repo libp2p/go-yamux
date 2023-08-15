@@ -1,6 +1,6 @@
 module github.com/libp2p/go-yamux/v4
 
-go 1.19
+go 1.20
 
 require (
 	github.com/libp2p/go-buffer-pool v0.0.2
