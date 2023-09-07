@@ -102,7 +102,7 @@ func (s *segmentedBuffer) GrowTo(max uint32, force bool) (bool, uint32) {
 	}
 	delta := max - currentWindow
 
-	if delta < (max/2) && !force {
+	if delta < (max/8) && !force {
 		return false, 0
 	}
 
