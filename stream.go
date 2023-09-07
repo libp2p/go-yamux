@@ -1,6 +1,7 @@
 package yamux
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -227,6 +228,7 @@ func (s *Stream) sendWindowUpdate(deadline <-chan struct{}) error {
 		} else {
 			recvWindow = min(s.recvWindow*2, s.session.config.MaxStreamWindowSize)
 		}
+		fmt.Printf("autotuning receive window. current: %d, new: %d, max: %d, rtt: %s\n", s.recvWindow, recvWindow, s.session.config.MaxStreamWindowSize, rtt)
 		if recvWindow > s.recvWindow {
 			grow := recvWindow - s.recvWindow
 			if err := s.memorySpan.ReserveMemory(int(grow), 128); err == nil {
