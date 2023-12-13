@@ -490,6 +490,12 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 	default:
 	}
 
+	select {
+	case <-deadline:
+		return ErrTimeout
+	default:
+	}
+
 	// duplicate as we're sending this async.
 	buf := pool.Get(headerSize + len(body))
 	copy(buf[:headerSize], hdr[:])
