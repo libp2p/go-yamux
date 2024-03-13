@@ -2,7 +2,6 @@ module github.com/libp2p/go-yamux/v4
 
 go 1.21
 
-
 require (
 	github.com/libp2p/go-buffer-pool v0.0.2
 	github.com/stretchr/testify v1.7.0
