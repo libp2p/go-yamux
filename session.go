@@ -3,6 +3,7 @@ package yamux
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -46,12 +47,8 @@ var nullMemoryManager = &nullMemoryManagerImpl{}
 type Session struct {
 	rtt int64 // to be accessed atomically, in nanoseconds
 
-	// remoteGoAway indicates the remote side does
-	// not want futher connections. Must be first for alignment.
-	remoteGoAway int32
-
 	// localGoAway indicates that we should stop
-	// accepting futher connections. Must be first for alignment.
+	// accepting futher streams. Must be first for alignment.
 	localGoAway int32
 
 	// nextStreamID is the next stream we should
@@ -203,9 +200,6 @@ func (s *Session) OpenStream(ctx context.Context) (*Stream, error) {
 	if s.IsClosed() {
 		return nil, s.shutdownErr
 	}
-	if atomic.LoadInt32(&s.remoteGoAway) == 1 {
-		return nil, ErrRemoteGoAway
-	}
 
 	// Block if we have too many inflight SYNs
 	select {
@@ -284,23 +278,46 @@ func (s *Session) AcceptStream() (*Stream, error) {
 }
 
 // Close is used to close the session and all streams.
-// Attempts to send a GoAway before closing the connection.
+// Sends a GoAway before closing the connection.
 func (s *Session) Close() error {
+	return s.CloseWithError(goAwayNormal)
+}
+
+// CloseWithError closes the session sending errCode in a goaway frame
+func (s *Session) CloseWithError(errCode uint32) error {
+	return s.closeWithError(errCode, true)
+}
+
+func (s *Session) closeWithError(errCode uint32, sendGoAway bool) error {
 	s.shutdownLock.Lock()
 	defer s.shutdownLock.Unlock()
-
 	if s.shutdown {
 		return nil
 	}
 	s.shutdown = true
 	if s.shutdownErr == nil {
-		s.shutdownErr = ErrSessionShutdown
+		s.shutdownErr = &ErrorGoAway{Remote: !sendGoAway, ErrorCode: errCode}
 	}
 	close(s.shutdownCh)
-	s.conn.Close()
 	s.stopKeepalive()
-	<-s.recvDoneCh
+
+	// wait for write loop
+	_ = s.conn.SetWriteDeadline(time.Now().Add(-1 * time.Hour)) // if SetWriteDeadline errored, any blocked writes will be unblocked
 	<-s.sendDoneCh
+
+	// send the goaway frame
+	if sendGoAway {
+		buf := pool.Get(headerSize)
+		hdr := s.goAway(errCode)
+		copy(buf, hdr[:])
+		if err := s.conn.SetWriteDeadline(time.Now().Add(goAwayWaitTime)); err == nil {
+			_, _ = s.conn.Write(buf) // Ignore the error. We are going to close the connection anyway
+		}
+	}
+	s.conn.Close()
+
+	// wait for read loop
+	<-s.recvDoneCh
 
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
@@ -320,11 +337,11 @@ func (s *Session) exitErr(err error) {
 		s.shutdownErr = err
 	}
 	s.shutdownLock.Unlock()
-	s.Close()
+	s.closeWithError(0, false)
 }
 
 // GoAway can be used to prevent accepting further
-// connections. It does not close the underlying conn.
+// streams. It does not close the underlying conn.
 func (s *Session) GoAway() error {
 	return s.sendMsg(s.goAway(goAwayNormal), nil, nil)
 }
@@ -516,6 +533,12 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 // send is a long running goroutine that sends data
 func (s *Session) send() {
 	if err := s.sendLoop(); err != nil {
+		if !s.IsClosed() && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "broken pipe")) {
+			// if remote has closed the connection, wait for recv loop to exit
+			// unfortunately it is impossible to close the connection such that FIN is sent and not RST
+			<-s.recvDoneCh
+			return
+		}
 		s.exitErr(err)
 	}
 }
@@ -781,18 +804,15 @@ func (s *Session) handleGoAway(hdr header) error {
 	code := hdr.Length()
 	switch code {
 	case goAwayNormal:
-		atomic.SwapInt32(&s.remoteGoAway, 1)
+		// Non error termination. Don't log.
 	case goAwayProtoErr:
 		s.logger.Printf("[ERR] yamux: received protocol error go away")
-		return fmt.Errorf("yamux protocol error")
 	case goAwayInternalErr:
 		s.logger.Printf("[ERR] yamux: received internal error go away")
-		return fmt.Errorf("remote yamux internal error")
 	default:
-		s.logger.Printf("[ERR] yamux: received unexpected go away")
-		return fmt.Errorf("unexpected go away received")
+		// application error code, let the application log
 	}
-	return nil
+	return &ErrorGoAway{ErrorCode: code, Remote: true}
 }
 
 // incomingStream is used to create a new incoming stream

@@ -3,6 +3,7 @@ package yamux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -627,28 +628,63 @@ func TestSendData_Large(t *testing.T) {
 	}
 }
 
+func testTCPConns(t *testing.T) (*Session, *Session) {
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverConnCh := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		serverConnCh <- conn
+	}()
+
+	clientConn, err := net.DialTCP("tcp", nil, ln.Addr().(*net.TCPAddr))
+	if err != nil {
+		ln.Close()
+		t.Fatal(err)
+		return nil, nil
+	}
+
+	client, _ := Client(clientConn, testConf(), nil)
+	server, _ := Server(<-serverConnCh, testConf(), nil)
+	return client, server
+
+}
+
 func TestGoAway(t *testing.T) {
 	// This test is noisy.
 	conf := testConf()
 	conf.LogOutput = io.Discard
 
-	client, server := testClientServerConfig(conf)
+	client, server := testTCPConns(t)
 	defer client.Close()
 	defer server.Close()
 
-	if err := server.GoAway(); err != nil {
+	if err := server.CloseWithError(42); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	for i := 0; i < 100; i++ {
 		s, err := client.Open(context.Background())
-		switch err {
-		case nil:
-			s.Close()
-		case ErrRemoteGoAway:
+		if err != nil {
+			if !errors.Is(err, ErrRemoteGoAway) {
+				t.Fatal("expected error to be ErrRemoteGoAway, got", err)
+			}
+			errExpected := &ErrorGoAway{Remote: true, ErrorCode: 42}
+			errGot, ok := err.(*ErrorGoAway)
+			if !ok {
+				t.Fatalf("expected type *ErrorGoAway, got %T", err)
+			}
+			if *errGot != *errExpected {
+				t.Fatalf("invalid error, expected %v, got %v", errExpected, errGot)
+			}
 			return
-		default:
-			t.Fatalf("err: %v", err)
+		} else {
+			s.Close()
 		}
 	}
 	t.Fatalf("expected GoAway error")
