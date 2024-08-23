@@ -628,7 +628,7 @@ func TestSendData_Large(t *testing.T) {
 	}
 }
 
-func testTCPConns(t *testing.T) (*Session, *Session) {
+func testTCPConns(t *testing.T) (net.Conn, net.Conn) {
 	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
 		t.Fatal(err)
@@ -649,9 +649,7 @@ func testTCPConns(t *testing.T) (*Session, *Session) {
 		return nil, nil
 	}
 
-	client, _ := Client(clientConn, testConf(), nil)
-	server, _ := Server(<-serverConnCh, testConf(), nil)
-	return client, server
+	return clientConn, <-serverConnCh
 
 }
 
@@ -660,7 +658,9 @@ func TestGoAway(t *testing.T) {
 	conf := testConf()
 	conf.LogOutput = io.Discard
 
-	client, server := testTCPConns(t)
+	clientConn, serverConn := testTCPConns(t)
+	client, _ := Client(clientConn, testConf(), nil)
+	server, _ := Server(serverConn, testConf(), nil)
 	defer client.Close()
 	defer server.Close()
 
@@ -1820,4 +1820,29 @@ func TestMaxIncomingStreams(t *testing.T) {
 	str.SetDeadline(time.Now().Add(time.Second))
 	_, err = str.Read([]byte{0})
 	require.NoError(t, err)
+}
+
+func TestRSTBehavior(t *testing.T) {
+	client, server := testTCPConns(t)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer server.Close()
+		server.Write([]byte("hello"))
+		time.Sleep(20 * time.Second)
+		buf := make([]byte, 10)
+		n, err := server.Read(buf)
+		if err != nil {
+			t.Error(err)
+		} else {
+			t.Log(string(buf[:n]))
+		}
+
+	}()
+	client.Write([]byte("world"))
+	time.Sleep(10 * time.Second)
+	// close client without reading server msg. This ensures that the TCP stack sends an RST
+	client.Close()
+	wg.Wait()
 }
