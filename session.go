@@ -42,6 +42,10 @@ func (n nullMemoryManagerImpl) Done()                                    {}
 
 var nullMemoryManager = &nullMemoryManagerImpl{}
 
+type CloseWriter interface {
+	CloseWrite() error
+}
+
 // Session is used to wrap a reliable ordered connection and to
 // multiplex it into multiple streams.
 type Session struct {
@@ -304,18 +308,27 @@ func (s *Session) closeWithError(errCode uint32, sendGoAway bool) error {
 	// wait for write loop
 	_ = s.conn.SetWriteDeadline(time.Now().Add(-1 * time.Hour)) // if SetWriteDeadline errored, any blocked writes will be unblocked
 	<-s.sendDoneCh
-
 	// send the goaway frame
 	if sendGoAway {
 		buf := pool.Get(headerSize)
 		hdr := s.goAway(errCode)
 		copy(buf, hdr[:])
 		if err := s.conn.SetWriteDeadline(time.Now().Add(goAwayWaitTime)); err == nil {
-			_, _ = s.conn.Write(buf) // Ignore the error. We are going to close the connection anyway
+			if _, err = s.conn.Write(buf); err != nil {
+				sendGoAway = false
+			}
+		} else {
+			sendGoAway = false
 		}
 	}
-	s.conn.Close()
-
+	if w, ok := s.conn.(CloseWriter); ok && sendGoAway {
+		if err := w.CloseWrite(); err != nil {
+			s.conn.Close()
+		}
+	} else {
+		s.conn.Close()
+	}
+	s.conn.SetReadDeadline(time.Now().Add(-1 * time.Hour))
 	// wait for read loop
 	<-s.recvDoneCh
 
@@ -533,12 +546,6 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 // send is a long running goroutine that sends data
 func (s *Session) send() {
 	if err := s.sendLoop(); err != nil {
-		if !s.IsClosed() && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "broken pipe")) {
-			// if remote has closed the connection, wait for recv loop to exit
-			// unfortunately it is impossible to close the connection such that FIN is sent and not RST
-			<-s.recvDoneCh
-			return
-		}
 		s.exitErr(err)
 	}
 }
@@ -654,7 +661,6 @@ func (s *Session) sendLoop() (err error) {
 
 		_, err := writer.Write(buf)
 		pool.Put(buf)
-
 		if err != nil {
 			if os.IsTimeout(err) {
 				err = ErrConnectionWriteTimeout
@@ -689,12 +695,39 @@ func (s *Session) recvLoop() (err error) {
 			err = fmt.Errorf("panic in yamux receive loop: %s", rerr)
 		}
 	}()
-	defer close(s.recvDoneCh)
+
+	gracefulCloseErr := errors.New("close gracefully")
+	defer func() {
+		close(s.recvDoneCh)
+		errGoAway := &ErrorGoAway{}
+		if errors.As(err, &errGoAway) {
+			return
+		}
+		if err != gracefulCloseErr {
+			s.conn.Close()
+			return
+		}
+		if err := s.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			s.conn.Close()
+			return
+		}
+		buf := make([]byte, 1<<16)
+		for {
+			_, err := s.conn.Read(buf)
+			if err != nil {
+				s.conn.Close()
+				return
+			}
+		}
+	}()
 	var hdr header
 	for {
 		// fmt.Printf("ReadFull from %#v\n", s.reader)
 		// Read the header
 		if _, err := io.ReadFull(s.reader, hdr[:]); err != nil {
+			if s.IsClosed() && os.IsTimeout(err) {
+				return gracefulCloseErr
+			}
 			if err != io.EOF && !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "reset by peer") {
 				s.logger.Printf("[ERR] yamux: Failed to read header: %v", err)
 			}

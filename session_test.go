@@ -40,6 +40,8 @@ type pipeConn struct {
 	writeDeadline pipeDeadline
 	writeBlocker  chan struct{}
 	closeCh       chan struct{}
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 func (p *pipeConn) SetDeadline(t time.Time) error {
@@ -66,10 +68,12 @@ func (p *pipeConn) Write(b []byte) (int, error) {
 }
 
 func (p *pipeConn) Close() error {
-	p.writeDeadline.set(time.Time{})
-	err := p.Conn.Close()
-	close(p.closeCh)
-	return err
+	p.closeOnce.Do(func() {
+		close(p.closeCh)
+		p.writeDeadline.set(time.Time{})
+		p.closeErr = p.Conn.Close()
+	})
+	return p.closeErr
 }
 
 func (p *pipeConn) BlockWrites() {
@@ -686,6 +690,7 @@ func TestGoAway(t *testing.T) {
 		} else {
 			s.Close()
 		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("expected GoAway error")
 }
@@ -1820,29 +1825,4 @@ func TestMaxIncomingStreams(t *testing.T) {
 	str.SetDeadline(time.Now().Add(time.Second))
 	_, err = str.Read([]byte{0})
 	require.NoError(t, err)
-}
-
-func TestRSTBehavior(t *testing.T) {
-	client, server := testTCPConns(t)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer server.Close()
-		server.Write([]byte("hello"))
-		time.Sleep(20 * time.Second)
-		buf := make([]byte, 10)
-		n, err := server.Read(buf)
-		if err != nil {
-			t.Error(err)
-		} else {
-			t.Log(string(buf[:n]))
-		}
-
-	}()
-	client.Write([]byte("world"))
-	time.Sleep(10 * time.Second)
-	// close client without reading server msg. This ensures that the TCP stack sends an RST
-	client.Close()
-	wg.Wait()
 }
