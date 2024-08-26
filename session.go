@@ -102,6 +102,8 @@ type Session struct {
 	// recvDoneCh is closed when recv() exits to avoid a race
 	// between stream registration and stream shutdown
 	recvDoneCh chan struct{}
+	// recvErr is the error the receive loop ended with
+	recvErr error
 
 	// sendDoneCh is closed when send() exits to avoid a race
 	// between returning from a Stream.Write and exiting from the send loop
@@ -288,10 +290,18 @@ func (s *Session) AcceptStream() (*Stream, error) {
 // semantics of the underlying net.Conn. For TCP connections, it may be dropped depending on LINGER value or
 // if there's unread data in the kernel receive buffer.
 func (s *Session) Close() error {
-	return s.close(true, goAwayNormal)
+	return s.close(ErrSessionShutdown, true, goAwayNormal)
 }
 
-func (s *Session) close(sendGoAway bool, errCode uint32) error {
+// CloseWithError is used to close the session and all streams after sending a GoAway message with errCode.
+// The GoAway may not actually be sent depending on the semantics of the underlying net.Conn.
+// For TCP connections, it may be dropped depending on LINGER value or if there's unread data in the kernel
+// receive buffer.
+func (s *Session) CloseWithError(errCode uint32) error {
+	return s.close(&GoAwayError{Remote: false, ErrorCode: errCode}, true, errCode)
+}
+
+func (s *Session) close(shutdownErr error, sendGoAway bool, errCode uint32) error {
 	s.shutdownLock.Lock()
 	defer s.shutdownLock.Unlock()
 
@@ -300,23 +310,25 @@ func (s *Session) close(sendGoAway bool, errCode uint32) error {
 	}
 	s.shutdown = true
 	if s.shutdownErr == nil {
-		s.shutdownErr = ErrSessionShutdown
+		s.shutdownErr = shutdownErr
 	}
 	close(s.shutdownCh)
 	s.stopKeepalive()
 
-	// wait for write loop to exit
-	_ = s.conn.SetWriteDeadline(time.Now().Add(-1 * time.Hour)) // if SetWriteDeadline errored, any blocked writes will be unblocked
-	<-s.sendDoneCh
 	if sendGoAway {
+		// wait for write loop to exit
+		// We need to write the current frame completely before sending a goaway.
+		// This will wait for at most s.config.ConnectionWriteTimeout
+		<-s.sendDoneCh
 		ga := s.goAway(errCode)
 		if err := s.conn.SetWriteDeadline(time.Now().Add(goAwayWaitTime)); err == nil {
 			_, _ = s.conn.Write(ga[:]) // there's nothing we can do on error here
 		}
+		s.conn.SetWriteDeadline(time.Time{})
 	}
 
-	s.conn.SetWriteDeadline(time.Time{})
 	s.conn.Close()
+	<-s.sendDoneCh
 	<-s.recvDoneCh
 
 	s.streamLock.Lock()
@@ -327,17 +339,6 @@ func (s *Session) close(sendGoAway bool, errCode uint32) error {
 		stream.memorySpan.Done()
 	}
 	return nil
-}
-
-// exitErr is used to handle an error that is causing the
-// session to terminate.
-func (s *Session) exitErr(err error) {
-	s.shutdownLock.Lock()
-	if s.shutdownErr == nil {
-		s.shutdownErr = err
-	}
-	s.shutdownLock.Unlock()
-	s.close(false, 0)
 }
 
 // GoAway can be used to prevent accepting further
@@ -468,7 +469,7 @@ func (s *Session) startKeepalive() {
 
 		if err != nil {
 			s.logger.Printf("[ERR] yamux: keepalive failed: %v", err)
-			s.exitErr(ErrKeepAliveTimeout)
+			s.close(ErrKeepAliveTimeout, false, 0)
 		}
 	})
 }
@@ -533,7 +534,18 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 // send is a long running goroutine that sends data
 func (s *Session) send() {
 	if err := s.sendLoop(); err != nil {
-		s.exitErr(err)
+		// Prefer the recvLoop error over the sendLoop error. The receive loop might have the error code
+		// received in a GoAway frame received just before the TCP RST that closed the sendLoop
+		//
+		// Take the shutdownLock to avoid closing the connection concurrently with a Close call.
+		s.shutdownLock.Lock()
+		s.conn.Close()
+		<-s.recvDoneCh
+		if _, ok := s.recvErr.(*GoAwayError); ok {
+			err = s.recvErr
+		}
+		s.shutdownLock.Unlock()
+		s.close(err, false, 0)
 	}
 }
 
@@ -661,7 +673,7 @@ func (s *Session) sendLoop() (err error) {
 // recv is a long running goroutine that accepts new data
 func (s *Session) recv() {
 	if err := s.recvLoop(); err != nil {
-		s.exitErr(err)
+		s.close(err, false, 0)
 	}
 }
 
@@ -683,7 +695,10 @@ func (s *Session) recvLoop() (err error) {
 			err = fmt.Errorf("panic in yamux receive loop: %s", rerr)
 		}
 	}()
-	defer close(s.recvDoneCh)
+	defer func() {
+		s.recvErr = err
+		close(s.recvDoneCh)
+	}()
 	var hdr header
 	for {
 		// fmt.Printf("ReadFull from %#v\n", s.reader)
@@ -799,17 +814,17 @@ func (s *Session) handleGoAway(hdr header) error {
 	switch code {
 	case goAwayNormal:
 		atomic.SwapInt32(&s.remoteGoAway, 1)
+		// Don't close connection on normal go away. Let the existing streams
+		// complete gracefully.
+		return nil
 	case goAwayProtoErr:
 		s.logger.Printf("[ERR] yamux: received protocol error go away")
-		return fmt.Errorf("yamux protocol error")
 	case goAwayInternalErr:
 		s.logger.Printf("[ERR] yamux: received internal error go away")
-		return fmt.Errorf("remote yamux internal error")
 	default:
-		s.logger.Printf("[ERR] yamux: received unexpected go away")
-		return fmt.Errorf("unexpected go away received")
+		s.logger.Printf("[ERR] yamux: received go away with error code: %d", code)
 	}
-	return nil
+	return &GoAwayError{Remote: true, ErrorCode: code}
 }
 
 // incomingStream is used to create a new incoming stream

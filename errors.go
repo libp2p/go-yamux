@@ -64,7 +64,7 @@ var (
 
 	// ErrSessionShutdown is used if there is a shutdown during
 	// an operation
-	ErrSessionShutdown = &Error{msg: "session shutdown"}
+	ErrSessionShutdown = &GoAwayError{ErrorCode: goAwayNormal, Remote: false}
 
 	// ErrStreamsExhausted is returned if we have no more
 	// stream ids to issue
@@ -87,7 +87,7 @@ var (
 	ErrUnexpectedFlag = &Error{msg: "unexpected flag"}
 
 	// ErrRemoteGoAway is used when we get a go away from the other side
-	ErrRemoteGoAway = &Error{msg: "remote end is not accepting connections"}
+	ErrRemoteGoAway = &GoAwayError{Remote: true, ErrorCode: goAwayNormal}
 
 	// ErrStreamReset is sent if a stream is reset. This can happen
 	// if the backlog is exceeded, or if there was a remote GoAway.

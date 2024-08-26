@@ -3,6 +3,7 @@ package yamux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -39,6 +40,8 @@ type pipeConn struct {
 	writeDeadline pipeDeadline
 	writeBlocker  chan struct{}
 	closeCh       chan struct{}
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 func (p *pipeConn) SetDeadline(t time.Time) error {
@@ -65,10 +68,12 @@ func (p *pipeConn) Write(b []byte) (int, error) {
 }
 
 func (p *pipeConn) Close() error {
-	p.writeDeadline.set(time.Time{})
-	err := p.Conn.Close()
-	close(p.closeCh)
-	return err
+	p.closeOnce.Do(func() {
+		p.writeDeadline.set(time.Time{})
+		p.closeErr = p.Conn.Close()
+		close(p.closeCh)
+	})
+	return p.closeErr
 }
 
 func (p *pipeConn) BlockWrites() {
@@ -650,6 +655,35 @@ func TestGoAway(t *testing.T) {
 		default:
 			t.Fatalf("err: %v", err)
 		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected GoAway error")
+}
+
+func TestCloseWithError(t *testing.T) {
+	// This test is noisy.
+	conf := testConf()
+	conf.LogOutput = io.Discard
+
+	client, server := testClientServerConfig(conf)
+	defer client.Close()
+	defer server.Close()
+
+	if err := server.CloseWithError(42); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		s, err := client.Open(context.Background())
+		if err == nil {
+			s.Close()
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if !errors.Is(err, &GoAwayError{ErrorCode: 42, Remote: true}) {
+			t.Fatalf("err: %v", err)
+		}
+		return
 	}
 	t.Fatalf("expected GoAway error")
 }
@@ -1048,6 +1082,7 @@ func TestKeepAlive_Timeout(t *testing.T) {
 	// Prevent the client from responding
 	clientConn := client.conn.(*pipeConn)
 	clientConn.BlockWrites()
+	defer clientConn.UnblockWrites()
 
 	select {
 	case err := <-errCh:
