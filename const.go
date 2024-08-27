@@ -24,8 +24,8 @@ func (ye *Error) Temporary() bool {
 }
 
 type GoAwayError struct {
-	Remote    bool
 	ErrorCode uint32
+	Remote    bool
 }
 
 func (e *GoAwayError) Error() string {

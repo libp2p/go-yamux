@@ -536,13 +536,14 @@ func (s *Session) send() {
 	if err := s.sendLoop(); err != nil {
 		// Prefer the recvLoop error over the sendLoop error. The receive loop might have the error code
 		// received in a GoAway frame received just before the TCP RST that closed the sendLoop
-		//
-		// Take the shutdownLock to avoid closing the connection concurrently with a Close call.
 		s.shutdownLock.Lock()
-		s.conn.Close()
-		<-s.recvDoneCh
-		if _, ok := s.recvErr.(*GoAwayError); ok {
-			err = s.recvErr
+		if s.shutdownErr == nil {
+			s.conn.Close()
+			<-s.recvDoneCh
+			if _, ok := s.recvErr.(*GoAwayError); ok {
+				err = s.recvErr
+			}
+			s.shutdownErr = err
 		}
 		s.shutdownLock.Unlock()
 		s.close(err, false, 0)
