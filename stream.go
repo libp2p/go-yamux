@@ -42,6 +42,7 @@ type Stream struct {
 	state                 streamState
 	writeState, readState halfStreamState
 	stateLock             sync.Mutex
+	resetErr              *StreamError
 
 	recvBuf segmentedBuffer
 
@@ -89,6 +90,7 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 START:
 	s.stateLock.Lock()
 	state := s.readState
+	resetErr := s.resetErr
 	s.stateLock.Unlock()
 
 	switch state {
@@ -101,7 +103,7 @@ START:
 		}
 		// Closed, but we have data pending -> read.
 	case halfReset:
-		return 0, ErrStreamReset
+		return 0, resetErr
 	default:
 		panic("unknown state")
 	}
@@ -147,6 +149,7 @@ func (s *Stream) write(b []byte) (n int, err error) {
 START:
 	s.stateLock.Lock()
 	state := s.writeState
+	resetErr := s.resetErr
 	s.stateLock.Unlock()
 
 	switch state {
@@ -155,7 +158,7 @@ START:
 	case halfClosed:
 		return 0, ErrStreamClosed
 	case halfReset:
-		return 0, ErrStreamReset
+		return 0, resetErr
 	default:
 		panic("unknown state")
 	}
@@ -250,13 +253,17 @@ func (s *Stream) sendClose() error {
 }
 
 // sendReset is used to send a RST
-func (s *Stream) sendReset() error {
-	hdr := encode(typeWindowUpdate, flagRST, s.id, 0)
+func (s *Stream) sendReset(errCode uint32) error {
+	hdr := encode(typeWindowUpdate, flagRST, s.id, errCode)
 	return s.session.sendMsg(hdr, nil, nil)
 }
 
 // Reset resets the stream (forcibly closes the stream)
 func (s *Stream) Reset() error {
+	return s.ResetWithError(0)
+}
+
+func (s *Stream) ResetWithError(errCode uint32) error {
 	sendReset := false
 	s.stateLock.Lock()
 	switch s.state {
@@ -281,10 +288,11 @@ func (s *Stream) Reset() error {
 		s.readState = halfReset
 	}
 	s.state = streamFinished
+	s.resetErr = &StreamError{Remote: false, ErrorCode: errCode}
 	s.notifyWaiting()
 	s.stateLock.Unlock()
 	if sendReset {
-		_ = s.sendReset()
+		_ = s.sendReset(errCode)
 	}
 	s.cleanup()
 	return nil
@@ -382,7 +390,7 @@ func (s *Stream) cleanup() {
 
 // processFlags is used to update the state of the stream
 // based on set flags, if any. Lock must be held
-func (s *Stream) processFlags(flags uint16) {
+func (s *Stream) processFlags(flags uint16, hdr header) {
 	// Close the stream without holding the state lock
 	var closeStream bool
 	defer func() {
@@ -425,6 +433,10 @@ func (s *Stream) processFlags(flags uint16) {
 			s.writeState = halfReset
 		}
 		s.state = streamFinished
+		// Length in a window update frame with RST flag encodes an error code.
+		if hdr.MsgType() == typeWindowUpdate && s.resetErr == nil {
+			s.resetErr = &StreamError{Remote: true, ErrorCode: hdr.Length()}
+		}
 		s.stateLock.Unlock()
 		closeStream = true
 		s.notifyWaiting()
@@ -439,7 +451,7 @@ func (s *Stream) notifyWaiting() {
 
 // incrSendWindow updates the size of our send window
 func (s *Stream) incrSendWindow(hdr header, flags uint16) {
-	s.processFlags(flags)
+	s.processFlags(flags, hdr)
 	// Increase window, unblock a sender
 	atomic.AddUint32(&s.sendWindow, hdr.Length())
 	asyncNotify(s.sendNotifyCh)
@@ -447,7 +459,7 @@ func (s *Stream) incrSendWindow(hdr header, flags uint16) {
 
 // readData is used to handle a data frame
 func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
-	s.processFlags(flags)
+	s.processFlags(flags, hdr)
 
 	// Check that our recv window is not exceeded
 	length := hdr.Length()

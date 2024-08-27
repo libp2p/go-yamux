@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1571,6 +1572,56 @@ func TestStreamResetRead(t *testing.T) {
 	wc.Wait()
 }
 
+func TestStreamResetWithError(t *testing.T) {
+	client, server := testClientServer()
+	defer client.Close()
+	defer server.Close()
+
+	wc := new(sync.WaitGroup)
+	wc.Add(2)
+	go func() {
+		defer wc.Done()
+		stream, err := server.AcceptStream()
+		if err != nil {
+			t.Error(err)
+		}
+
+		se := &StreamError{}
+		_, err = io.ReadAll(stream)
+		if !errors.As(err, &se) {
+			t.Errorf("exptected StreamError, got type:%T, err: %s", err, err)
+			return
+		}
+		expected := &StreamError{Remote: true, ErrorCode: 42}
+		assert.Equal(t, se, expected)
+	}()
+
+	stream, err := client.OpenStream(context.Background())
+	if err != nil {
+		t.Error(err)
+	}
+
+	go func() {
+		defer wc.Done()
+
+		se := &StreamError{}
+		_, err := io.ReadAll(stream)
+		if !errors.As(err, &se) {
+			t.Errorf("exptected StreamError, got type:%T, err: %s", err, err)
+			return
+		}
+		expected := &StreamError{Remote: false, ErrorCode: 42}
+		assert.Equal(t, se, expected)
+	}()
+
+	time.Sleep(1 * time.Second)
+	err = stream.ResetWithError(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wc.Wait()
+}
+
 func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	config := testConf()
 	config.EnableKeepAlive = false
@@ -1809,7 +1860,7 @@ func TestMaxIncomingStreams(t *testing.T) {
 	require.NoError(t, err)
 	str.SetDeadline(time.Now().Add(time.Second))
 	_, err = str.Read([]byte{0})
-	require.EqualError(t, err, "stream reset")
+	require.ErrorIs(t, err, ErrStreamReset)
 
 	// Now close one of the streams.
 	// This should then allow the client to open a new stream.

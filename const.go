@@ -57,6 +57,27 @@ func (e *GoAwayError) Is(target error) bool {
 	return false
 }
 
+// A StreamError is used for errors returned from Read and Write calls after the stream is Reset
+type StreamError struct {
+	ErrorCode uint32
+	Remote    bool
+}
+
+func (s *StreamError) Error() string {
+	if s.Remote {
+		return fmt.Sprintf("stream reset by remote, error code: %d", s.ErrorCode)
+	}
+	return fmt.Sprintf("stream reset, error code: %d", s.ErrorCode)
+}
+
+func (s *StreamError) Is(target error) bool {
+	if target == ErrStreamReset {
+		return true
+	}
+	e, ok := target.(*StreamError)
+	return ok && *e == *s
+}
+
 var (
 	// ErrInvalidVersion means we received a frame with an
 	// invalid version
