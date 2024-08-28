@@ -173,7 +173,7 @@ const (
 	// It's not an implementation choice, the value defined in the specification.
 	initialStreamWindow = 256 * 1024
 	maxStreamWindow     = 16 * 1024 * 1024
-	goAwayWaitTime      = 5 * time.Second
+	goAwayWaitTime      = 50 * time.Millisecond
 )
 
 const (

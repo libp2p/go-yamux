@@ -41,8 +41,8 @@ type Stream struct {
 
 	state                 streamState
 	writeState, readState halfStreamState
+	writeErr, readErr     error
 	stateLock             sync.Mutex
-	resetErr              *StreamError
 
 	recvBuf segmentedBuffer
 
@@ -90,7 +90,7 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 START:
 	s.stateLock.Lock()
 	state := s.readState
-	resetErr := s.resetErr
+	resetErr := s.readErr
 	s.stateLock.Unlock()
 
 	switch state {
@@ -149,7 +149,7 @@ func (s *Stream) write(b []byte) (n int, err error) {
 START:
 	s.stateLock.Lock()
 	state := s.writeState
-	resetErr := s.resetErr
+	resetErr := s.writeErr
 	s.stateLock.Unlock()
 
 	switch state {
@@ -283,12 +283,13 @@ func (s *Stream) ResetWithError(errCode uint32) error {
 	// If we've already sent/received an EOF, no need to reset that side.
 	if s.writeState == halfOpen {
 		s.writeState = halfReset
+		s.writeErr = &StreamError{Remote: false, ErrorCode: errCode}
 	}
 	if s.readState == halfOpen {
 		s.readState = halfReset
+		s.readErr = &StreamError{Remote: false, ErrorCode: errCode}
 	}
 	s.state = streamFinished
-	s.resetErr = &StreamError{Remote: false, ErrorCode: errCode}
 	s.notifyWaiting()
 	s.stateLock.Unlock()
 	if sendReset {
@@ -344,6 +345,7 @@ func (s *Stream) CloseRead() error {
 		panic("invalid state")
 	}
 	s.readState = halfReset
+	s.readErr = ErrStreamReset
 	cleanup = s.writeState != halfOpen
 	if cleanup {
 		s.state = streamFinished
@@ -365,13 +367,15 @@ func (s *Stream) Close() error {
 }
 
 // forceClose is used for when the session is exiting
-func (s *Stream) forceClose() {
+func (s *Stream) forceClose(err error) {
 	s.stateLock.Lock()
 	if s.readState == halfOpen {
 		s.readState = halfReset
+		s.readErr = err
 	}
 	if s.writeState == halfOpen {
 		s.writeState = halfReset
+		s.writeErr = err
 	}
 	s.state = streamFinished
 	s.notifyWaiting()
@@ -426,17 +430,20 @@ func (s *Stream) processFlags(flags uint16, hdr header) {
 	}
 	if flags&flagRST == flagRST {
 		s.stateLock.Lock()
+		var resetErr error = ErrStreamReset
+		// Length in a window update frame with RST flag encodes an error code.
+		if hdr.MsgType() == typeWindowUpdate {
+			resetErr = &StreamError{Remote: true, ErrorCode: hdr.Length()}
+		}
 		if s.readState == halfOpen {
 			s.readState = halfReset
+			s.readErr = resetErr
 		}
 		if s.writeState == halfOpen {
 			s.writeState = halfReset
+			s.writeErr = resetErr
 		}
 		s.state = streamFinished
-		// Length in a window update frame with RST flag encodes an error code.
-		if hdr.MsgType() == typeWindowUpdate && s.resetErr == nil {
-			s.resetErr = &StreamError{Remote: true, ErrorCode: hdr.Length()}
-		}
 		s.stateLock.Unlock()
 		closeStream = true
 		s.notifyWaiting()
