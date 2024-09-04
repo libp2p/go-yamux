@@ -290,7 +290,7 @@ func (s *Session) AcceptStream() (*Stream, error) {
 // semantics of the underlying net.Conn. For TCP connections, it may be dropped depending on LINGER value or
 // if there's unread data in the kernel receive buffer.
 func (s *Session) Close() error {
-	return s.close(ErrSessionShutdown, true, goAwayNormal)
+	return s.close(ErrSessionShutdown, false, goAwayNormal)
 }
 
 // CloseWithError is used to close the session and all streams after sending a GoAway message with errCode.
