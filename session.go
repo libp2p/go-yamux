@@ -334,7 +334,7 @@ func (s *Session) close(shutdownErr error, sendGoAway bool, errCode uint32) erro
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
 	for id, stream := range s.streams {
-		stream.forceClose()
+		stream.forceClose(fmt.Errorf("%w: connection closed: %w", ErrStreamReset, s.shutdownErr))
 		delete(s.streams, id)
 		stream.memorySpan.Done()
 	}
