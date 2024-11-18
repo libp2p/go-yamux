@@ -651,7 +651,7 @@ func TestGoAway(t *testing.T) {
 		switch err {
 		case nil:
 			s.Close()
-		case ErrRemoteGoAway:
+		case ErrRemoteGoAwayNormal:
 			return
 		default:
 			t.Fatalf("err: %v", err)

@@ -46,9 +46,9 @@ var nullMemoryManager = &nullMemoryManagerImpl{}
 type Session struct {
 	rtt int64 // to be accessed atomically, in nanoseconds
 
-	// remoteGoAway indicates the remote side does
+	// remoteGoAwayNormal indicates the remote side does
 	// not want futher connections. Must be first for alignment.
-	remoteGoAway int32
+	remoteGoAwayNormal int32
 
 	// localGoAway indicates that we should stop
 	// accepting futher connections. Must be first for alignment.
@@ -205,8 +205,8 @@ func (s *Session) OpenStream(ctx context.Context) (*Stream, error) {
 	if s.IsClosed() {
 		return nil, s.shutdownErr
 	}
-	if atomic.LoadInt32(&s.remoteGoAway) == 1 {
-		return nil, ErrRemoteGoAway
+	if atomic.LoadInt32(&s.remoteGoAwayNormal) == 1 {
+		return nil, ErrRemoteGoAwayNormal
 	}
 
 	// Block if we have too many inflight SYNs
@@ -285,15 +285,15 @@ func (s *Session) AcceptStream() (*Stream, error) {
 	}
 }
 
-// Close is used to close the session and all streams.
-// Attempts to send a GoAway before closing the connection. The GoAway may not actually be sent depending on the
-// semantics of the underlying net.Conn. For TCP connections, it may be dropped depending on LINGER value or
-// if there's unread data in the kernel receive buffer.
+// Close is used to close the session and all streams. It doesn't send a GoAway before
+// closing the connection.
 func (s *Session) Close() error {
 	return s.close(ErrSessionShutdown, false, goAwayNormal)
 }
 
 // CloseWithError is used to close the session and all streams after sending a GoAway message with errCode.
+// Blocks for ConnectionWriteTimeout to write the GoAway message.
+//
 // The GoAway may not actually be sent depending on the semantics of the underlying net.Conn.
 // For TCP connections, it may be dropped depending on LINGER value or if there's unread data in the kernel
 // receive buffer.
@@ -315,7 +315,8 @@ func (s *Session) close(shutdownErr error, sendGoAway bool, errCode uint32) erro
 	close(s.shutdownCh)
 	s.stopKeepalive()
 
-	if sendGoAway {
+	// Only send GoAway if we have an error code.
+	if sendGoAway && errCode != goAwayNormal {
 		// wait for write loop to exit
 		// We need to write the current frame completely before sending a goaway.
 		// This will wait for at most s.config.ConnectionWriteTimeout
@@ -334,7 +335,7 @@ func (s *Session) close(shutdownErr error, sendGoAway bool, errCode uint32) erro
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
 	for id, stream := range s.streams {
-		stream.forceClose(fmt.Errorf("%w: connection closed: %w", ErrStreamReset, s.shutdownErr))
+		stream.forceClose(s.shutdownErr)
 		delete(s.streams, id)
 		stream.memorySpan.Done()
 	}
@@ -814,7 +815,7 @@ func (s *Session) handleGoAway(hdr header) error {
 	code := hdr.Length()
 	switch code {
 	case goAwayNormal:
-		atomic.SwapInt32(&s.remoteGoAway, 1)
+		atomic.SwapInt32(&s.remoteGoAwayNormal, 1)
 		// Don't close connection on normal go away. Let the existing streams
 		// complete gracefully.
 		return nil

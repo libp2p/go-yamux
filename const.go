@@ -45,9 +45,12 @@ func (e *GoAwayError) Temporary() bool {
 
 func (e *GoAwayError) Is(target error) bool {
 	// to maintain compatibility with errors returned by previous versions
-	if e.Remote && target == ErrRemoteGoAway {
+	if e.Remote && target == ErrRemoteGoAwayNormal {
 		return true
 	} else if !e.Remote && target == ErrSessionShutdown {
+		return true
+	} else if target == ErrStreamReset {
+		// A GoAway on a connection also resets all the streams.
 		return true
 	}
 
@@ -111,8 +114,8 @@ var (
 	// ErrUnexpectedFlag is set when we get an unexpected flag
 	ErrUnexpectedFlag = &Error{msg: "unexpected flag"}
 
-	// ErrRemoteGoAway is used when we get a go away from the other side
-	ErrRemoteGoAway = &GoAwayError{Remote: true, ErrorCode: goAwayNormal}
+	// ErrRemoteGoAwayNormal is used when we get a go away from the other side
+	ErrRemoteGoAwayNormal = &GoAwayError{Remote: true, ErrorCode: goAwayNormal}
 
 	// ErrStreamReset is sent if a stream is reset. This can happen
 	// if the backlog is exceeded, or if there was a remote GoAway.

@@ -310,7 +310,7 @@ func (s *Stream) CloseWrite() error {
 		return nil
 	case halfReset:
 		s.stateLock.Unlock()
-		return ErrStreamReset
+		return s.writeErr
 	default:
 		panic("invalid state")
 	}
@@ -331,7 +331,8 @@ func (s *Stream) CloseWrite() error {
 	return err
 }
 
-// CloseRead is used to close the stream for writing.
+// CloseRead is used to close the stream for reading.
+// Note: Remote is not notified.
 func (s *Stream) CloseRead() error {
 	cleanup := false
 	s.stateLock.Lock()
