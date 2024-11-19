@@ -648,15 +648,16 @@ func TestGoAway(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		s, err := client.Open(context.Background())
-		switch err {
-		case nil:
+		if err == nil {
 			s.Close()
-		case ErrRemoteGoAwayNormal:
-			return
-		default:
-			t.Fatalf("err: %v", err)
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
-		time.Sleep(50 * time.Millisecond)
+		if err != ErrRemoteGoAway {
+			t.Fatalf("expected %s, got %s", ErrRemoteGoAway, err)
+		} else {
+			return
+		}
 	}
 	t.Fatalf("expected GoAway error")
 }
@@ -1578,7 +1579,7 @@ func TestStreamResetWithError(t *testing.T) {
 	defer server.Close()
 
 	wc := new(sync.WaitGroup)
-	wc.Add(2)
+	wc.Add(1)
 	go func() {
 		defer wc.Done()
 		stream, err := server.AcceptStream()
@@ -1589,7 +1590,7 @@ func TestStreamResetWithError(t *testing.T) {
 		se := &StreamError{}
 		_, err = io.ReadAll(stream)
 		if !errors.As(err, &se) {
-			t.Errorf("exptected StreamError, got type:%T, err: %s", err, err)
+			t.Errorf("expected StreamError, got type:%T, err: %s", err, err)
 			return
 		}
 		expected := &StreamError{Remote: true, ErrorCode: 42}
@@ -1601,24 +1602,19 @@ func TestStreamResetWithError(t *testing.T) {
 		t.Error(err)
 	}
 
-	go func() {
-		defer wc.Done()
-
-		se := &StreamError{}
-		_, err := io.ReadAll(stream)
-		if !errors.As(err, &se) {
-			t.Errorf("exptected StreamError, got type:%T, err: %s", err, err)
-			return
-		}
-		expected := &StreamError{Remote: false, ErrorCode: 42}
-		assert.Equal(t, se, expected)
-	}()
-
 	time.Sleep(1 * time.Second)
 	err = stream.ResetWithError(42)
 	if err != nil {
 		t.Fatal(err)
 	}
+	se := &StreamError{}
+	_, err = io.ReadAll(stream)
+	if !errors.As(err, &se) {
+		t.Errorf("expected StreamError, got type:%T, err: %s", err, err)
+		return
+	}
+	expected := &StreamError{Remote: false, ErrorCode: 42}
+	assert.Equal(t, se, expected)
 	wc.Wait()
 }
 

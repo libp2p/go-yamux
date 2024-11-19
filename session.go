@@ -46,10 +46,6 @@ var nullMemoryManager = &nullMemoryManagerImpl{}
 type Session struct {
 	rtt int64 // to be accessed atomically, in nanoseconds
 
-	// remoteGoAwayNormal indicates the remote side does
-	// not want futher connections. Must be first for alignment.
-	remoteGoAwayNormal int32
-
 	// localGoAway indicates that we should stop
 	// accepting futher connections. Must be first for alignment.
 	localGoAway int32
@@ -204,9 +200,6 @@ func (s *Session) Open(ctx context.Context) (net.Conn, error) {
 func (s *Session) OpenStream(ctx context.Context) (*Stream, error) {
 	if s.IsClosed() {
 		return nil, s.shutdownErr
-	}
-	if atomic.LoadInt32(&s.remoteGoAwayNormal) == 1 {
-		return nil, ErrRemoteGoAwayNormal
 	}
 
 	// Block if we have too many inflight SYNs
@@ -535,8 +528,14 @@ func (s *Session) sendMsg(hdr header, body []byte, deadline <-chan struct{}) err
 // send is a long running goroutine that sends data
 func (s *Session) send() {
 	if err := s.sendLoop(); err != nil {
-		// Prefer the recvLoop error over the sendLoop error. The receive loop might have the error code
-		// received in a GoAway frame received just before the TCP RST that closed the sendLoop
+		// If we are shutting down because remote closed the connection, prefer the recvLoop error
+		// over the sendLoop error. The receive loop might have error code received in a GoAway frame,
+		// which was received just before the TCP RST that closed the sendLoop.
+		//
+		// If we are closing because of an write error, we use the error from the sendLoop and not the recvLoop.
+		// We hold the shutdownLock, close the connection, and wait for the receive loop to finish and
+		// use the sendLoop error. Holding the shutdownLock ensures that the recvLoop doesn't trigger connection close
+		// but the sendLoop does.
 		s.shutdownLock.Lock()
 		if s.shutdownErr == nil {
 			s.conn.Close()
@@ -815,10 +814,7 @@ func (s *Session) handleGoAway(hdr header) error {
 	code := hdr.Length()
 	switch code {
 	case goAwayNormal:
-		atomic.SwapInt32(&s.remoteGoAwayNormal, 1)
-		// Don't close connection on normal go away. Let the existing streams
-		// complete gracefully.
-		return nil
+		return ErrRemoteGoAway
 	case goAwayProtoErr:
 		s.logger.Printf("[ERR] yamux: received protocol error go away")
 	case goAwayInternalErr:

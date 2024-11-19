@@ -395,7 +395,7 @@ func (s *Stream) cleanup() {
 
 // processFlags is used to update the state of the stream
 // based on set flags, if any. Lock must be held
-func (s *Stream) processFlags(flags uint16, hdr header) {
+func (s *Stream) processFlags(hdr header, flags uint16) {
 	// Close the stream without holding the state lock
 	var closeStream bool
 	defer func() {
@@ -459,7 +459,7 @@ func (s *Stream) notifyWaiting() {
 
 // incrSendWindow updates the size of our send window
 func (s *Stream) incrSendWindow(hdr header, flags uint16) {
-	s.processFlags(flags, hdr)
+	s.processFlags(hdr, flags)
 	// Increase window, unblock a sender
 	atomic.AddUint32(&s.sendWindow, hdr.Length())
 	asyncNotify(s.sendNotifyCh)
@@ -467,7 +467,7 @@ func (s *Stream) incrSendWindow(hdr header, flags uint16) {
 
 // readData is used to handle a data frame
 func (s *Stream) readData(hdr header, flags uint16, conn io.Reader) error {
-	s.processFlags(flags, hdr)
+	s.processFlags(hdr, flags)
 
 	// Check that our recv window is not exceeded
 	length := hdr.Length()
