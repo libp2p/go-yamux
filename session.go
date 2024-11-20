@@ -325,10 +325,14 @@ func (s *Session) close(shutdownErr error, sendGoAway bool, errCode uint32) erro
 	<-s.sendDoneCh
 	<-s.recvDoneCh
 
+	resetErr := shutdownErr
+	if _, ok := resetErr.(*GoAwayError); !ok {
+		resetErr = fmt.Errorf("%w: connection closed: %w", ErrStreamReset, shutdownErr)
+	}
 	s.streamLock.Lock()
 	defer s.streamLock.Unlock()
 	for id, stream := range s.streams {
-		stream.forceClose(s.shutdownErr)
+		stream.forceClose(resetErr)
 		delete(s.streams, id)
 		stream.memorySpan.Done()
 	}
