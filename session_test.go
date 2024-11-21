@@ -671,7 +671,8 @@ func TestCloseWithError(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	if err := server.CloseWithError(42); err != nil {
+	errCh := server.CloseWithErrorChan(42)
+	if err := <-errCh; err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
