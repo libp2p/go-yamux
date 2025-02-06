@@ -3,6 +3,7 @@ package yamux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +41,8 @@ type pipeConn struct {
 	writeDeadline pipeDeadline
 	writeBlocker  chan struct{}
 	closeCh       chan struct{}
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 func (p *pipeConn) SetDeadline(t time.Time) error {
@@ -65,10 +69,12 @@ func (p *pipeConn) Write(b []byte) (int, error) {
 }
 
 func (p *pipeConn) Close() error {
-	p.writeDeadline.set(time.Time{})
-	err := p.Conn.Close()
-	close(p.closeCh)
-	return err
+	p.closeOnce.Do(func() {
+		p.writeDeadline.set(time.Time{})
+		p.closeErr = p.Conn.Close()
+		close(p.closeCh)
+	})
+	return p.closeErr
 }
 
 func (p *pipeConn) BlockWrites() {
@@ -642,14 +648,44 @@ func TestGoAway(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		s, err := client.Open(context.Background())
-		switch err {
-		case nil:
+		if err == nil {
 			s.Close()
-		case ErrRemoteGoAway:
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if err != ErrRemoteGoAway {
+			t.Fatalf("expected %s, got %s", ErrRemoteGoAway, err)
+		} else {
 			return
-		default:
+		}
+	}
+	t.Fatalf("expected GoAway error")
+}
+
+func TestCloseWithError(t *testing.T) {
+	// This test is noisy.
+	conf := testConf()
+	conf.LogOutput = io.Discard
+
+	client, server := testClientServerConfig(conf)
+	defer client.Close()
+	defer server.Close()
+
+	if err := server.CloseWithError(42); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		s, err := client.Open(context.Background())
+		if err == nil {
+			s.Close()
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if !errors.Is(err, &GoAwayError{ErrorCode: 42, Remote: true}) {
 			t.Fatalf("err: %v", err)
 		}
+		return
 	}
 	t.Fatalf("expected GoAway error")
 }
@@ -1048,6 +1084,7 @@ func TestKeepAlive_Timeout(t *testing.T) {
 	// Prevent the client from responding
 	clientConn := client.conn.(*pipeConn)
 	clientConn.BlockWrites()
+	defer clientConn.UnblockWrites()
 
 	select {
 	case err := <-errCh:
@@ -1536,6 +1573,51 @@ func TestStreamResetRead(t *testing.T) {
 	wc.Wait()
 }
 
+func TestStreamResetWithError(t *testing.T) {
+	client, server := testClientServer()
+	defer client.Close()
+	defer server.Close()
+
+	wc := new(sync.WaitGroup)
+	wc.Add(1)
+	go func() {
+		defer wc.Done()
+		stream, err := server.AcceptStream()
+		if err != nil {
+			t.Error(err)
+		}
+
+		se := &StreamError{}
+		_, err = io.ReadAll(stream)
+		if !errors.As(err, &se) {
+			t.Errorf("expected StreamError, got type:%T, err: %s", err, err)
+			return
+		}
+		expected := &StreamError{Remote: true, ErrorCode: 42}
+		assert.Equal(t, se, expected)
+	}()
+
+	stream, err := client.OpenStream(context.Background())
+	if err != nil {
+		t.Error(err)
+	}
+
+	time.Sleep(1 * time.Second)
+	err = stream.ResetWithError(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	se := &StreamError{}
+	_, err = io.ReadAll(stream)
+	if !errors.As(err, &se) {
+		t.Errorf("expected StreamError, got type:%T, err: %s", err, err)
+		return
+	}
+	expected := &StreamError{Remote: false, ErrorCode: 42}
+	assert.Equal(t, se, expected)
+	wc.Wait()
+}
+
 func TestLotsOfWritesWithStreamDeadline(t *testing.T) {
 	config := testConf()
 	config.EnableKeepAlive = false
@@ -1774,7 +1856,7 @@ func TestMaxIncomingStreams(t *testing.T) {
 	require.NoError(t, err)
 	str.SetDeadline(time.Now().Add(time.Second))
 	_, err = str.Read([]byte{0})
-	require.EqualError(t, err, "stream reset")
+	require.ErrorIs(t, err, ErrStreamReset)
 
 	// Now close one of the streams.
 	// This should then allow the client to open a new stream.

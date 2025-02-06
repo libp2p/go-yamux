@@ -3,6 +3,7 @@ package yamux
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 type Error struct {
@@ -22,6 +23,64 @@ func (ye *Error) Temporary() bool {
 	return ye.temporary
 }
 
+type GoAwayError struct {
+	ErrorCode uint32
+	Remote    bool
+}
+
+func (e *GoAwayError) Error() string {
+	if e.Remote {
+		return fmt.Sprintf("remote sent go away, code: %d", e.ErrorCode)
+	}
+	return fmt.Sprintf("sent go away, code: %d", e.ErrorCode)
+}
+
+func (e *GoAwayError) Timeout() bool {
+	return false
+}
+
+func (e *GoAwayError) Temporary() bool {
+	return false
+}
+
+func (e *GoAwayError) Is(target error) bool {
+	// to maintain compatibility with errors returned by previous versions
+	if e.Remote && target == ErrRemoteGoAway {
+		return true
+	} else if !e.Remote && target == ErrSessionShutdown {
+		return true
+	} else if target == ErrStreamReset {
+		// A GoAway on a connection also resets all the streams.
+		return true
+	}
+
+	if err, ok := target.(*GoAwayError); ok {
+		return *e == *err
+	}
+	return false
+}
+
+// A StreamError is used for errors returned from Read and Write calls after the stream is Reset
+type StreamError struct {
+	ErrorCode uint32
+	Remote    bool
+}
+
+func (s *StreamError) Error() string {
+	if s.Remote {
+		return fmt.Sprintf("stream reset by remote, error code: %d", s.ErrorCode)
+	}
+	return fmt.Sprintf("stream reset, error code: %d", s.ErrorCode)
+}
+
+func (s *StreamError) Is(target error) bool {
+	if target == ErrStreamReset {
+		return true
+	}
+	e, ok := target.(*StreamError)
+	return ok && *e == *s
+}
+
 var (
 	// ErrInvalidVersion means we received a frame with an
 	// invalid version
@@ -33,7 +92,7 @@ var (
 
 	// ErrSessionShutdown is used if there is a shutdown during
 	// an operation
-	ErrSessionShutdown = &Error{msg: "session shutdown"}
+	ErrSessionShutdown = &GoAwayError{ErrorCode: goAwayNormal, Remote: false}
 
 	// ErrStreamsExhausted is returned if we have no more
 	// stream ids to issue
@@ -55,8 +114,9 @@ var (
 	// ErrUnexpectedFlag is set when we get an unexpected flag
 	ErrUnexpectedFlag = &Error{msg: "unexpected flag"}
 
-	// ErrRemoteGoAway is used when we get a go away from the other side
-	ErrRemoteGoAway = &Error{msg: "remote end is not accepting connections"}
+	// ErrRemoteGoAway is used when we get a go away from the other side with error code
+	// goAwayNormal(0).
+	ErrRemoteGoAway = &GoAwayError{Remote: true, ErrorCode: goAwayNormal}
 
 	// ErrStreamReset is sent if a stream is reset. This can happen
 	// if the backlog is exceeded, or if there was a remote GoAway.
@@ -117,6 +177,7 @@ const (
 	// It's not an implementation choice, the value defined in the specification.
 	initialStreamWindow = 256 * 1024
 	maxStreamWindow     = 16 * 1024 * 1024
+	goAwayWaitTime      = 100 * time.Millisecond
 )
 
 const (
