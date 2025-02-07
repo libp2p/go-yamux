@@ -1867,3 +1867,10 @@ func TestMaxIncomingStreams(t *testing.T) {
 	_, err = str.Read([]byte{0})
 	require.NoError(t, err)
 }
+
+func TestErrorCodeErrorIsErrStreamReset(t *testing.T) {
+	se := &StreamError{}
+	require.True(t, errors.Is(se, ErrStreamReset))
+	ge := &GoAwayError{}
+	require.True(t, errors.Is(ge, ErrStreamReset))
+}
