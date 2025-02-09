@@ -1,4 +1,4 @@
-module github.com/libp2p/go-yamux/v4
+module github.com/libp2p/go-yamux/v5
 
 go 1.22
 
