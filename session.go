@@ -773,7 +773,9 @@ func (s *Session) handleStreamMessage(hdr header) error {
 
 	// Read the new data
 	if err := stream.readData(hdr, flags, s.reader); err != nil {
-		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, nil); sendErr != nil {
+		deadline := makePipeDeadline()
+		deadline.set(time.Now().Add(goAwayWaitTime))
+		if sendErr := s.sendMsg(s.goAway(goAwayProtoErr), nil, deadline.wait()); sendErr != nil {
 			s.logger.Printf("[WARN] yamux: failed to send go away: %v", sendErr)
 		}
 		return err
