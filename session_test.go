@@ -1359,7 +1359,7 @@ func TestSession_sendMsg_Timeout(t *testing.T) {
 
 	hdr := encode(typePing, flagACK, 0, 0)
 	for {
-		err := client.sendMsg(hdr, nil, nil)
+		err := client.sendMsg(hdr, nil, nil, true)
 		if err == nil {
 			continue
 		} else if err == ErrConnectionWriteTimeout {
@@ -1382,14 +1382,14 @@ func TestWindowOverflow(t *testing.T) {
 			defer server.Close()
 
 			hdr1 := encode(typeData, flagSYN, i, 0)
-			_ = client.sendMsg(hdr1, nil, nil)
+			_ = client.sendMsg(hdr1, nil, nil, true)
 			s, err := server.AcceptStream()
 			if err != nil {
 				t.Fatal(err)
 			}
 			msg := make([]byte, client.config.MaxStreamWindowSize*2)
 			hdr2 := encode(typeData, 0, i, uint32(len(msg)))
-			_ = client.sendMsg(hdr2, msg, nil)
+			_ = client.sendMsg(hdr2, msg, nil, true)
 			_, err = io.ReadAll(s)
 			if err == nil {
 				t.Fatal("expected to read no data")
@@ -1873,4 +1873,109 @@ func TestErrorCodeErrorIsErrStreamReset(t *testing.T) {
 	require.True(t, errors.Is(se, ErrStreamReset))
 	ge := &GoAwayError{}
 	require.True(t, errors.Is(ge, ErrStreamReset))
+}
+
+func testTCPConn(t *testing.T) (net.Conn, net.Conn) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// Channel to receive the server-side connection
+	serverConnCh := make(chan net.Conn, 1)
+	errCh := make(chan error, 1)
+
+	// Accept connection in goroutine
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		serverConnCh <- conn
+	}()
+
+	// Connect to the listener
+	clientConn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for server connection or error
+	select {
+	case serverConn := <-serverConnCh:
+		return clientConn, serverConn
+	case err := <-errCh:
+		clientConn.Close()
+		t.Fatal(err)
+		return nil, nil
+	case <-time.After(time.Second):
+		clientConn.Close()
+		t.Fatal("timeout waiting for connection")
+		return nil, nil
+	}
+}
+
+// TestSessionCloseDeadlock is a regression test for a deadlock on closing connections.
+// See: https://github.com/libp2p/go-yamux/issues/129 for details
+func TestSessionCloseDeadlock(t *testing.T) {
+	const n = 10
+	const numWrites = 1000
+	var closeWG sync.WaitGroup
+	closeWG.Add(numWrites * n)
+	for i := 0; i < n; i++ {
+		go func() {
+			conn1, conn2 := testTCPConn(t)
+			conf := DefaultConfig()
+			conf.LogOutput = io.Discard
+			client, err := Client(conn1, conf, nil)
+			require.NoError(t, err)
+			defer client.Close()
+
+			conf = DefaultConfig()
+			conf.LogOutput = io.Discard
+			server, err := Server(conn2, conf, nil)
+			require.NoError(t, err)
+			defer server.Close()
+
+			// Create a stream from client
+			stream, err := client.OpenStream(context.Background())
+			require.NoError(t, err)
+			defer stream.Close()
+
+			// Accept the stream on server side
+			serverStream, err := server.AcceptStream()
+			require.NoError(t, err)
+			defer serverStream.Close()
+
+			// Send an incomplete dataframe to the server to ensure that the recvloop is reading the rest
+			// of the message.
+			buf := make([]byte, 1<<10)
+			hdr := encode(typeData, serverStream.sendFlags(), serverStream.id, uint32(len(buf))+1000)
+			err = server.sendMsg(hdr, buf, nil, true)
+			require.NoError(t, err)
+
+			time.Sleep(1 * time.Second) // Let the read loop block on reading rest of the data frame
+
+			// Make many writes so that these writes takes up all the buffer space in the channel
+			// and the recvLoop deadlocks because it's unable to send the goAwayProtoErr
+			var writeWG sync.WaitGroup
+			writeWG.Add(numWrites)
+			for i := 0; i < numWrites; i++ {
+				go func() {
+					defer closeWG.Done()
+					buf := make([]byte, 1) // make small writes so that we queue up the channel
+					writeWG.Done()         // This is used to trigger concurrent streamWrite with CloseWrite.
+					stream.Write(buf)
+				}()
+			}
+			// Wait for the client to exit
+			writeWG.Wait()
+			// Close the Write half of the client conn so that the send loop exits first.
+			err = conn1.(*net.TCPConn).CloseWrite()
+			require.NoError(t, err)
+		}()
+	}
+	closeWG.Wait()
 }
