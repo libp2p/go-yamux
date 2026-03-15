@@ -223,18 +223,40 @@ func (s *Stream) sendWindowUpdate(deadline <-chan struct{}) error {
 	}
 
 	now := time.Now()
-	if rtt := s.session.RTT(); flags == 0 && rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
-		var recvWindow uint32
-		if s.recvWindow > math.MaxUint32/2 {
-			recvWindow = min(math.MaxUint32, s.session.config.MaxStreamWindowSize)
-		} else {
-			recvWindow = min(s.recvWindow*2, s.session.config.MaxStreamWindowSize)
+	if rtt := s.session.RTT(); flags == 0 && rtt > 0 {
+		// Scale the autotuning threshold proportionally to the window size.
+		//
+		// The time between consecutive sendWindowUpdate calls includes the time
+		// to transfer ~half the current window of data. As the window grows,
+		// this transfer time grows linearly, but the original fixed 4*RTT
+		// threshold does not — causing autotuning to self-block at roughly 2x
+		// the initial window size on any link with non-trivial latency.
+		//
+		// By scaling the threshold by currentWindow/initialWindow, we allow
+		// proportionally more time for larger windows to fill. At the initial
+		// window size (scaleFactor=1) the behavior is identical to the original.
+		//
+		// See: https://github.com/libp2p/go-yamux/issues/136
+		scaleFactor := time.Duration(s.recvWindow / s.session.config.InitialStreamWindowSize)
+		if scaleFactor < 1 {
+			scaleFactor = 1
 		}
-		if recvWindow > s.recvWindow {
-			grow := recvWindow - s.recvWindow
-			if err := s.memorySpan.ReserveMemory(int(grow), 128); err == nil {
-				s.recvWindow = recvWindow
-				_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
+		if scaleFactor > 64 {
+			scaleFactor = 64
+		}
+		if now.Sub(s.epochStart) < rtt*4*scaleFactor {
+			var recvWindow uint32
+			if s.recvWindow > math.MaxUint32/2 {
+				recvWindow = min(math.MaxUint32, s.session.config.MaxStreamWindowSize)
+			} else {
+				recvWindow = min(s.recvWindow*2, s.session.config.MaxStreamWindowSize)
+			}
+			if recvWindow > s.recvWindow {
+				grow := recvWindow - s.recvWindow
+				if err := s.memorySpan.ReserveMemory(int(grow), 128); err == nil {
+					s.recvWindow = recvWindow
+					_, delta = s.recvBuf.GrowTo(s.recvWindow, true)
+				}
 			}
 		}
 	}
