@@ -383,6 +383,12 @@ func (s *Session) RTT() time.Duration {
 	return time.Duration(atomic.LoadInt64(&s.rtt))
 }
 
+// GetRTT returns the current smoothed RTT estimate.
+// Returns 0 if no measurement has been taken yet.
+func (s *Session) GetRTT() time.Duration {
+	return s.getRTT()
+}
+
 // Ping is used to measure the RTT response time
 func (s *Session) Ping() (dur time.Duration, err error) {
 	// Prepare a ping.
